@@ -70,6 +70,11 @@ export default class TwelvePlugin extends Plugin {
       return;
     }
 
+    if (query === "forecast") {
+      await this.renderForecast(el);
+      return;
+    }
+
     el.createEl("div", { text: `Unknown 12 query: ${query}` });
   }
 
@@ -92,6 +97,84 @@ export default class TwelvePlugin extends Plugin {
       groupEl.createEl("h3", { text: group.title });
       group.tasks.forEach((task) => groupEl.appendChild(this.renderTaskRow(task)));
     }
+  }
+
+  private async renderForecast(container: HTMLElement) {
+    const today = this.normalizeDate(new Date());
+    const tasks = this.taskIndex
+      .getTasks()
+      .filter((task) => task.due && task.status !== "done" && task.status !== "cancelled")
+      .filter((task) => !this.isExcludedPath(task.filePath))
+      .sort((a, b) => {
+        const aDate = this.parseDateToken(a.due!);
+        const bDate = this.parseDateToken(b.due!);
+        return (aDate?.getTime() ?? Infinity) - (bDate?.getTime() ?? Infinity);
+      });
+
+    if (!tasks.length) {
+      container.createEl("div", { text: "No upcoming tasks found." });
+      return;
+    }
+
+    const groups = new Map<string, Task[]>();
+    for (const task of tasks) {
+      const group = this.getForecastGroup(task, today);
+      const bucket = groups.get(group) ?? [];
+      bucket.push(task);
+      groups.set(group, bucket);
+    }
+
+    for (const title of ["This Week", "Later This Month", "Future Months"]) {
+      const groupTasks = groups.get(title);
+      if (!groupTasks?.length) {
+        continue;
+      }
+      const groupEl = container.createEl("div", { cls: "twelve-group" });
+      groupEl.createEl("h3", { text: title });
+      groupTasks.forEach((task) => groupEl.appendChild(this.renderForecastRow(task)));
+    }
+  }
+
+  private renderForecastRow(task: Task): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "twelve-task-row";
+
+    const textEl = document.createElement("span");
+    textEl.className = "twelve-task-text";
+    textEl.textContent = task.text;
+    row.appendChild(textEl);
+
+    const dueEl = document.createElement("span");
+    dueEl.className = "twelve-task-meta";
+    dueEl.textContent = task.due ?? "no due date";
+    row.appendChild(dueEl);
+
+    const projectEl = document.createElement("span");
+    projectEl.className = "twelve-task-meta";
+    projectEl.textContent = ` ${task.fileName}`;
+    row.appendChild(projectEl);
+
+    return row;
+  }
+
+  private getForecastGroup(task: Task, today: Date): string {
+    const dueDate = this.parseDateToken(task.due ?? "");
+    if (!dueDate) {
+      return "Future Months";
+    }
+
+    const weekEnd = new Date(today);
+    weekEnd.setDate(today.getDate() + (7 - today.getDay()));
+
+    if (dueDate.getTime() <= weekEnd.getTime()) {
+      return "This Week";
+    }
+
+    if (dueDate.getFullYear() === today.getFullYear() && dueDate.getMonth() === today.getMonth()) {
+      return "Later This Month";
+    }
+
+    return "Future Months";
   }
 
   private renderTaskRow(task: Task): HTMLElement {
