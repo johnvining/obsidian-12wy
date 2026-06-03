@@ -1,0 +1,16 @@
+{
+  "name": "12-task-plugin",
+  "displayName": "12",
+  "version": "0.0.1",
+  "description": "Native Obsidian task views and write-back code block plugin.",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.19.0",
+    "obsidian": "^1.4.0",
+    "typescript": "^5.5.0"
+  }
+}

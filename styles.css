@@ -1,0 +1,19 @@
+.twelve-group {
+  margin-bottom: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--interactive-accent);
+}
+.twelve-task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.35rem 0;
+}
+.twelve-task-text {
+  flex: 1;
+  white-space: normal;
+}
+.twelve-task-meta {
+  color: var(--text-faint);
+  font-size: 0.9rem;
+}
