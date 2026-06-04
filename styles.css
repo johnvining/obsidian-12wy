@@ -1,76 +1,98 @@
 /* =========================================================================
    12 plugin — refined cream / serif / green design language.
-   Colors lean on Obsidian theme variables so the views adapt to the active
-   theme, with a green accent for section chrome and progress.
+   Dense, low-chrome views. Colors lean on Obsidian theme variables so the
+   views adapt to the active theme, with a green accent for section chrome.
    ========================================================================= */
 
 .twelve-view {
   --twelve-green: var(--color-green, #5b8a52);
   --twelve-line: var(--background-modifier-border);
   --twelve-faint: var(--text-faint);
-  font-size: var(--font-text-size, 16px);
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+
+/* Strip Obsidian's default markdown-table chrome from our custom tables; we
+   re-add only the separators we want below. */
+.twelve-view table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+}
+.twelve-view table th,
+.twelve-view table td {
+  border: none;
+  background: transparent;
 }
 
 /* ---- Sections ---------------------------------------------------------- */
 .twelve-section {
-  margin: 0 0 1.6rem 0;
+  margin: 0 0 1.1rem 0;
 }
 .twelve-section-header {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding-bottom: 0.4rem;
-  margin-bottom: 0.7rem;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.4rem;
   border-bottom: 1px solid var(--twelve-line);
 }
 .twelve-section-title {
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--twelve-green);
 }
-.twelve-section-body {
-  display: block;
-}
 
-/* ---- Badges ------------------------------------------------------------ */
+/* ---- Badges & pills ---------------------------------------------------- */
 .twelve-badge {
   margin-left: auto;
-  min-width: 1.5rem;
-  padding: 0.05rem 0.5rem;
+  min-width: 1.3rem;
+  padding: 0.02rem 0.45rem;
   border-radius: 999px;
   background: var(--twelve-green);
   color: var(--text-on-accent, #fff);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .twelve-badge-soft {
-  margin-left: 0.6rem;
+  margin-left: 0.5rem;
   background: transparent;
   color: var(--twelve-faint);
   font-weight: 500;
+}
+.twelve-pill {
+  display: inline-block;
+  padding: 0.04rem 0.45rem;
+  border-radius: 0.4rem;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .twelve-empty {
   color: var(--twelve-faint);
   font-style: italic;
-  padding: 0.4rem 0;
+  padding: 0.3rem 0;
+  font-size: 0.85rem;
 }
 .twelve-faint {
   color: var(--twelve-faint);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 
 /* ---- Checkboxes -------------------------------------------------------- */
 .twelve-check {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 0.95rem;
+  height: 0.95rem;
   accent-color: var(--twelve-green);
   cursor: pointer;
   flex: 0 0 auto;
+  margin: 0;
 }
 
 /* ---- Generic check list (commitments, errands) ------------------------- */
@@ -80,20 +102,16 @@
 }
 .twelve-row {
   display: flex;
-  align-items: baseline;
-  gap: 0.7rem;
-  padding: 0.5rem 0.4rem;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.28rem 0.3rem;
   border-bottom: 1px solid var(--twelve-line);
 }
 .twelve-row:last-child {
   border-bottom: none;
 }
-.twelve-row .twelve-check {
-  align-self: center;
-}
 .twelve-row-text {
   flex: 1;
-  line-height: 1.4;
 }
 .twelve-row.is-done .twelve-row-text {
   text-decoration: line-through;
@@ -101,37 +119,30 @@
 }
 .twelve-tag {
   display: inline-block;
-  margin-right: 0.5rem;
-  padding: 0.02rem 0.45rem;
+  margin-right: 0.4rem;
+  padding: 0.01rem 0.4rem;
   border-radius: 0.3rem;
   background: var(--background-modifier-hover);
   color: var(--twelve-green);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 /* ---- Task table (today / forecast / waiting / projects / recurring) ----- */
-.twelve-task-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.twelve-task-tr {
+.twelve-view table.twelve-task-table td {
+  padding: 0.3rem 0.5rem;
+  vertical-align: middle;
   border-bottom: 1px solid var(--twelve-line);
 }
-.twelve-task-tr:last-child {
+.twelve-view table.twelve-task-table tr:last-child td {
   border-bottom: none;
 }
-.twelve-task-table td {
-  padding: 0.5rem 0.4rem;
-  vertical-align: middle;
-}
 .twelve-cell-check {
-  width: 1.4rem;
+  width: 1.2rem;
+  padding-right: 0 !important;
 }
 .twelve-cell-text {
   width: 100%;
-  line-height: 1.4;
 }
 .twelve-task-tr.is-done .twelve-cell-text {
   text-decoration: line-through;
@@ -139,33 +150,55 @@
 }
 .twelve-chip {
   display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.02rem 0.4rem;
+  margin-left: 0.35rem;
+  padding: 0.01rem 0.35rem;
   border-radius: 0.3rem;
   border: 1px solid var(--twelve-line);
   color: var(--twelve-faint);
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
-.twelve-cell-meta,
+.twelve-cell-meta {
+  white-space: nowrap;
+  text-align: right;
+  width: 1%;
+}
+.twelve-due {
+  font-size: 0.76rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.twelve-due-past {
+  color: var(--color-red, #b4513f);
+}
+.twelve-due-today {
+  color: var(--twelve-green);
+  font-weight: 600;
+}
+.twelve-due-soon {
+  color: var(--text-muted);
+}
+.twelve-due-future {
+  color: var(--twelve-faint);
+}
 .twelve-cell-project {
   white-space: nowrap;
-  color: var(--twelve-faint);
-  font-size: 0.82rem;
   text-align: right;
+  width: 1%;
 }
 .twelve-cell-actions {
   white-space: nowrap;
   text-align: right;
+  width: 1%;
 }
 
 .twelve-icon-button {
   background: transparent;
   border: none;
   box-shadow: none;
-  padding: 0.2rem;
-  margin-left: 0.1rem;
+  padding: 0.15rem;
+  margin-left: 0.05rem;
   border-radius: 0.3rem;
   color: var(--twelve-faint);
   cursor: pointer;
@@ -173,11 +206,11 @@
   transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
 .twelve-icon-button .svg-icon {
-  width: 1rem;
-  height: 1rem;
+  width: 0.9rem;
+  height: 0.9rem;
 }
 .twelve-task-tr:hover .twelve-icon-button {
-  opacity: 0.7;
+  opacity: 0.6;
 }
 .twelve-icon-button:hover {
   opacity: 1;
@@ -187,37 +220,32 @@
 
 /* ---- Daily tracker grid ------------------------------------------------ */
 .twelve-tracker {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
   table-layout: fixed;
 }
 .twelve-tracker th {
-  padding: 0.5rem 0.3rem;
-  font-size: 0.62rem;
+  padding: 0.35rem 0.25rem;
+  font-size: 0.58rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--twelve-faint);
   text-align: center;
   vertical-align: bottom;
-  line-height: 1.25;
+  line-height: 1.2;
 }
 .twelve-tracker th.twelve-tracker-day,
-.twelve-tracker td.twelve-tracker-day {
+.twelve-view table.twelve-tracker td.twelve-tracker-day {
   text-align: left;
-  width: 4.5rem;
+  width: 4rem;
+  border: none;
+  font-size: 0.76rem;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
-.twelve-tracker td {
-  padding: 0.55rem 0.3rem;
+.twelve-view table.twelve-tracker td {
+  padding: 0.35rem 0.25rem;
   text-align: center;
   border: 1px solid var(--twelve-line);
-}
-.twelve-tracker td.twelve-tracker-day {
-  border: none;
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }
 .twelve-tracker tr.is-today td.twelve-tracker-day {
   font-weight: 700;
@@ -230,17 +258,17 @@
 /* ---- Dashboard cards --------------------------------------------------- */
 .twelve-dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0.6rem;
-  margin-bottom: 1.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1.3rem;
 }
 .twelve-card {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 1rem 1.1rem;
+  padding: 0.7rem 0.85rem;
   border: 1px solid var(--twelve-line);
-  border-radius: 0.6rem;
+  border-radius: 0.5rem;
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
@@ -250,33 +278,29 @@
 }
 .twelve-card-title {
   font-family: var(--font-text-theme, serif);
-  font-size: 1.05rem;
+  font-size: 0.98rem;
   font-weight: 700;
 }
 
 /* ---- 12 Week Year pace table ------------------------------------------- */
-.twelve-wy-table {
-  width: 100%;
-  border-collapse: collapse;
-}
 .twelve-wy-table th {
-  padding: 0.5rem 0.6rem;
-  font-size: 0.7rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--twelve-faint);
   text-align: left;
 }
 .twelve-wy-table th.twelve-wy-open,
-.twelve-wy-table td.twelve-wy-open {
+.twelve-view table.twelve-wy-table td.twelve-wy-open {
   text-align: right;
-  width: 3.5rem;
+  width: 3rem;
   color: var(--twelve-faint);
   font-variant-numeric: tabular-nums;
 }
-.twelve-wy-table td {
-  padding: 0.7rem 0.6rem;
+.twelve-view table.twelve-wy-table td {
+  padding: 0.5rem 0.5rem;
   border-top: 1px solid var(--twelve-line);
   vertical-align: top;
 }
@@ -288,21 +312,21 @@
   width: 100%;
 }
 .twelve-metric {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 .twelve-metric:last-child {
   margin-bottom: 0;
 }
 .twelve-metric-label {
   display: block;
-  margin-bottom: 0.25rem;
-  font-size: 0.9rem;
+  margin-bottom: 0.18rem;
+  font-size: 0.84rem;
   font-variant-numeric: tabular-nums;
 }
 
 /* ---- Progress bars ----------------------------------------------------- */
 .twelve-bar {
-  height: 0.4rem;
+  height: 0.35rem;
   border-radius: 999px;
   background: var(--background-modifier-border);
   overflow: hidden;
@@ -324,12 +348,12 @@
 
 /* ---- Projects ---------------------------------------------------------- */
 .twelve-project {
-  margin-bottom: 1.1rem;
+  margin-bottom: 0.9rem;
 }
 .twelve-project-head {
   display: flex;
   align-items: baseline;
-  margin-bottom: 0.2rem;
+  margin-bottom: 0.1rem;
 }
 .twelve-project-name {
   font-weight: 700;

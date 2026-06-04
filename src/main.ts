@@ -440,10 +440,16 @@ export default class TwelvePlugin extends Plugin {
       textCell.addEventListener("dblclick", () => this.editTaskText(task));
 
       if (opts.showDue) {
-        tr.createEl("td", { cls: "twelve-cell-meta", text: task.due ?? "" });
+        const meta = tr.createEl("td", { cls: "twelve-cell-meta" });
+        const rel = task.due ? this.relativeDate(task.due) : null;
+        if (rel) {
+          const due = meta.createSpan({ cls: `twelve-due twelve-due-${rel.tone}`, text: rel.text });
+          due.setAttr("title", task.due!);
+        }
       }
       if (opts.showProject) {
-        tr.createEl("td", { cls: "twelve-cell-project", text: this.projectName(task.fileName) });
+        const projectCell = tr.createEl("td", { cls: "twelve-cell-project" });
+        projectCell.createSpan({ cls: "twelve-pill", text: this.projectName(task.fileName) });
       }
       if (opts.actions) {
         const actions = tr.createEl("td", { cls: "twelve-cell-actions" });
@@ -1235,6 +1241,35 @@ export default class TwelvePlugin extends Plugin {
 
   private normalizeDate(value: Date): Date {
     return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+
+  // Compact, human-relative rendering of a due token, with a tone for coloring:
+  // past = overdue, today, soon = within a week, future = further out.
+  private relativeDate(token: string): { text: string; tone: "past" | "today" | "soon" | "future" } | null {
+    const date = this.parseDateToken(token);
+    if (!date) {
+      return null;
+    }
+    const today = this.normalizeDate(new Date());
+    const diff = Math.round((date.getTime() - today.getTime()) / 86_400_000);
+
+    let text: string;
+    if (diff === 0) {
+      text = "today";
+    } else if (diff === 1) {
+      text = "tomorrow";
+    } else if (diff === -1) {
+      text = "yesterday";
+    } else if (diff > 1 && diff <= 6) {
+      text = date.toLocaleDateString(undefined, { weekday: "short" });
+    } else if (diff < -1 && diff >= -6) {
+      text = `${-diff}d ago`;
+    } else {
+      text = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    const tone = diff < 0 ? "past" : diff === 0 ? "today" : diff <= 6 ? "soon" : "future";
+    return { text, tone };
   }
 
   private isIncludedPath(path: string): boolean {
