@@ -1,20 +1,86 @@
-# 12 Obsidian Plugin
+# 12 — Obsidian 12 Week Year plugin
 
-Native Obsidian task views with bracket-token task grammar.
+Native, fast task views for running a [12 Week Year](https://12weekyear.com/) in
+Obsidian. Project notes hold tasks in a bracket-token grammar; the plugin
+surfaces them into dashboards, a today view, progress tracking, errands, and
+more — all rendered natively (no Dataview) and written back to your notes.
 
-## Build
+## Build & dev
 
 1. `npm install`
 2. `npm run build`
 
-The output is copied into `.obsidian/plugins/task-12/` for local vault dev.
+The build deploys into two places:
 
-## Usage
+- `.obsidian/plugins/task-12/` — this repo as a dev vault.
+- `sample-vault/.obsidian/plugins/task-12/` — a bundled **sample vault** with
+  fixture notes, auto-enabled. **Open `sample-vault/` in Obsidian to see every
+  view working.**
 
-Use code blocks like:
+## Views
 
-```md
-```12 today
+Drop a fenced code block into any note:
+
+    ```12 dashboard
+    ```
+
+| Query | Renders |
+|---|---|
+| `12 today` (or bare `12`) | This week's Commitments + Daily Tracker + an "Other" table of everything surfaced for today |
+| `12 dashboard` | Card grid (counts link to view notes) + the 12-Week-Year pace table |
+| `12 12wy` | Cycle detail: pace table + this week's commitments & tracker |
+| `12 errands` | `errands.md` grouped by its `##` category headings |
+| `12 forecast` | Upcoming dated tasks grouped This Week / Later This Month / Future Months |
+| `12 waiting` | Tasks marked `[WAITING]` |
+| `12 projects` | Active projects grouped 12WY / Trips / Other |
+| `12 recurring` | Tasks with an `[every:…]` rule |
+
+Dashboard cards open the note that contains the matching `12 <view>` block.
+
+## Task grammar
+
+A task is a normal Markdown checkbox with optional trailing `[bracket]` tokens:
+
+```
+- [ ] Draft poems 60–65 [TODAY] [due:2026-06-05] [p:high]
 ```
 
-The plugin currently implements phase 1: `12 today` and checkbox toggle write-back.
+- **Status:** `[ ]` todo, `[x]` done, `[/]` in-progress, `[-]` cancelled.
+- **Markers:** `[TODAY]`, `[WAITING]`, `[ERRANDS]`, `[URGENT]`, `[SOON]`, `[TRAVEL]`.
+- **Dates:** `[due:YYYY-MM-DD]`, `[start:YYYY-MM-DD]`, `[done:YYYY-MM-DD]`.
+- **Recurrence:** `[every:1 week]` (`day(s)`/`week(s)`/`month(s)`). Completing a
+  recurring task spawns the next occurrence with an advanced due date.
+- **Other:** `[p:high|med|low]`, `[id:…]`, `#tags`. Trailing `[[wikilinks]]` are
+  left intact.
+
+## File conventions (⚠️ inferred — please verify)
+
+These formats were **inferred from screenshots of the previous system** and may
+need adjustment to match your real vault. The `sample-vault/` files are the
+canonical examples.
+
+- **Cycle:** `12wy/current.md` contains `**Dates:** YYYY-MM-DD to YYYY-MM-DD`.
+- **Weeks:** `12wy/weeks/wNN.md` with a `## Commitments` checkbox list (optional
+  leading `[Tag]` per line) and a `## Daily Tracker` markdown table (first
+  column is the day, e.g. `M 06/01`; other cells are `Y` or blank). Rows dated
+  after today are hidden; clicking a cell toggles `Y`.
+- **12WY projects:** a note under `projects - active/` (or `12wy/`) with
+  `**Status:** … [12WY]`. Progress is declared under a `**12WY Progress:**`
+  marker, one metric per `- current / target label` bullet (multiple allowed):
+
+  ```
+  **12WY Progress:**
+  - 59 / 100 poems posted
+  - 1 / 1 intro posted
+  ```
+
+- **Errands:** `errands.md` with `##` category headings; each heading becomes a
+  group in the errands view.
+- **Travel/trips:** `**Status:** … [TRAVEL]`.
+
+## Known assumptions to confirm
+
+Because the grammar is inferred, the most likely things to differ from your real
+setup are: the `**12WY Progress:**` block format, the daily-tracker day-label
+format, and whether errands group by `##` headings vs. a marker. Adjust the
+parsers (or your files) once you can compare against the real vault.

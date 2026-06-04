@@ -20,6 +20,12 @@ export function parseTaskLine(line: string, filePath: string, lineNumber: number
     if (!tokenMatch) {
       break;
     }
+    // Don't consume Obsidian wikilinks (`[[Note]]`) that happen to sit at the
+    // end of the line — the trailing `]]` would otherwise be parsed as a token
+    // and corrupt the link on write-back.
+    if (tokenMatch.index > 0 && text[tokenMatch.index - 1] === "[") {
+      break;
+    }
     const token = tokenMatch[0].trim();
     tokens.unshift(token);
     text = text.slice(0, tokenMatch.index).trim();

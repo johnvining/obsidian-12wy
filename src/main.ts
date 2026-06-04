@@ -1,4 +1,15 @@
-import { App, MarkdownPostProcessorContext, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
+import {
+  App,
+  MarkdownPostProcessorContext,
+  Modal,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TFile,
+  debounce,
+  setIcon,
+} from "obsidian";
 import { TaskIndex } from "./index";
 import { parseTaskLine, serializeTask } from "./parser";
 import type { Task } from "./types";
@@ -7,6 +18,13 @@ interface TwelveSettings {
   rootFolder: string;
   includeTicklerFolder: boolean;
   includeRecurringFile: boolean;
+}
+
+interface CommitItem {
+  lineNumber: number;
+  text: string;
+  status: string;
+  lineText: string;
 }
 
 const DEFAULT_SETTINGS: TwelveSettings = {
@@ -22,20 +40,31 @@ const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recu
 
 export default class TwelvePlugin extends Plugin {
   private taskIndex!: TaskIndex;
-  private settings: TwelveSettings = DEFAULT_SETTINGS;
+  settings: TwelveSettings = DEFAULT_SETTINGS;
+
+  // Coalesce bursts of update events (e.g. while typing) into a single preview
+  // refresh so we don't re-render every code block on every keystroke.
+  private refreshPreview = debounce(() => this.refreshPreviewNow(), 150, false);
 
   async onload() {
     console.log("Loading 12 plugin");
     await this.loadSettings();
     this.addSettingTab(new TwelveSettingTab(this.app, this));
     await this.initializeTaskIndex();
-    this.taskIndex.onUpdate(() => this.refreshPreview());
 
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
         if (file instanceof TFile && file.extension === "md") {
           await this.taskIndex.updateFile(file);
-          this.refreshPreview();
+        }
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on("create", async (file) => {
+        if (file instanceof TFile && file.extension === "md") {
+          this.viewNoteMap = null;
+          await this.taskIndex.updateFile(file);
         }
       })
     );
@@ -43,9 +72,9 @@ export default class TwelvePlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
         if (file instanceof TFile && file.extension === "md") {
+          this.viewNoteMap = null;
           this.taskIndex.removeFile(oldPath);
           await this.taskIndex.updateFile(file);
-          this.refreshPreview();
         }
       })
     );
@@ -53,22 +82,11 @@ export default class TwelvePlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof TFile) {
+          this.viewNoteMap = null;
           this.taskIndex.removeFile(file.path);
-          this.refreshPreview();
         }
       })
     );
-
-    this.registerEvent(
-      this.app.metadataCache.on("changed", (file) => {
-        if (file instanceof TFile && file.extension === "md") {
-          this.taskIndex.refreshFile(file);
-          this.refreshPreview();
-        }
-      })
-    );
-
-    this.taskIndex.onUpdate(() => this.refreshPreview());
 
     this.registerMarkdownCodeBlockProcessor("12", async (source, el, ctx) => {
       await this.processCodeBlock(source, el, ctx);
@@ -86,6 +104,10 @@ export default class TwelvePlugin extends Plugin {
       this.settings.includeTicklerFolder,
       this.settings.includeRecurringFile
     );
+    // Each index instance starts with no listeners, so registering here (rather
+    // than at every call site) keeps exactly one handler attached and avoids the
+    // listener leak that previously accumulated on every settings save.
+    this.taskIndex.onUpdate(() => this.refreshPreview());
     await this.taskIndex.loadAll();
   }
 
@@ -93,67 +115,348 @@ export default class TwelvePlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
 
-  private async saveSettings() {
+  async saveSettings() {
     await this.saveData(this.settings);
     await this.initializeTaskIndex();
-    this.taskIndex.onUpdate(() => this.refreshPreview());
     this.refreshPreview();
   }
 
   private async processCodeBlock(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) {
     el.empty();
-    const query = source.trim().split(/\s+/)[0]?.toLowerCase();
-    if (!query || query === "today") {
-      await this.renderToday(el);
-      return;
+    el.addClass("twelve-view");
+    const query = this.resolveQuery(source, el, ctx);
+    try {
+      switch (query) {
+        case "today":
+          await this.renderToday(el);
+          return;
+        case "dashboard":
+          await this.renderDashboard(el);
+          return;
+        case "forecast":
+          await this.renderForecast(el);
+          return;
+        case "errands":
+          await this.renderErrands(el);
+          return;
+        case "waiting":
+          await this.renderWaiting(el);
+          return;
+        case "projects":
+          await this.renderProjects(el);
+          return;
+        case "recurring":
+          await this.renderRecurring(el);
+          return;
+        case "12wy":
+          await this.render12WY(el);
+          return;
+        default:
+          this.renderEmpty(el, `Unknown 12 query: ${query}`);
+      }
+    } catch (error) {
+      console.error("[12] Failed to render view", query, error);
+      this.renderEmpty(el, "Something went wrong rendering this view. See console for details.");
     }
-
-    if (query === "forecast") {
-      await this.renderForecast(el);
-      return;
-    }
-
-    if (query === "errands") {
-      await this.renderMarkerView(el, "ERRANDS", "Errands");
-      return;
-    }
-
-    if (query === "waiting") {
-      await this.renderMarkerView(el, "WAITING", "Waiting");
-      return;
-    }
-
-    if (query === "projects") {
-      await this.renderProjects(el);
-      return;
-    }
-
-    if (query === "12wy") {
-      await this.render12WY(el);
-      return;
-    }
-
-    el.createEl("div", { text: `Unknown 12 query: ${query}` });
   }
 
-  private async renderToday(container: HTMLElement) {
-    const today = new Date();
-    const tasks = this.taskIndex
+  // The view name can be authored either inside the block body (`source`) or on
+  // the fence's info line (```12 dashboard). Obsidian only passes the body to
+  // the processor, so when the body is empty we recover the word from the fence
+  // line via the section info. This makes both authoring styles work.
+  private resolveQuery(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): string {
+    const fromBody = source.trim().split(/\s+/)[0]?.toLowerCase();
+    if (fromBody) {
+      return fromBody;
+    }
+    const info = ctx.getSectionInfo(el);
+    if (info) {
+      const fenceLine = info.text.split("\n")[info.lineStart] ?? "";
+      const match = /^\s*`{3,}\s*12\s+(\w+)/.exec(fenceLine);
+      if (match) {
+        return match[1].toLowerCase();
+      }
+    }
+    return "today";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared UI primitives (refined cream / serif / green design language)
+  // ---------------------------------------------------------------------------
+
+  private renderEmpty(container: HTMLElement, message: string) {
+    container.createDiv({ cls: "twelve-empty", text: message });
+  }
+
+  // A titled section with an uppercase header and an optional count/ratio badge.
+  private section(container: HTMLElement, title: string, badge?: string | number): HTMLElement {
+    const section = container.createDiv({ cls: "twelve-section" });
+    const header = section.createDiv({ cls: "twelve-section-header" });
+    header.createSpan({ cls: "twelve-section-title", text: title });
+    if (badge !== undefined && badge !== "") {
+      header.createSpan({ cls: "twelve-badge", text: String(badge) });
+    }
+    return section.createDiv({ cls: "twelve-section-body" });
+  }
+
+  private iconButton(parent: HTMLElement, icon: string, tooltip: string, onClick: () => void | Promise<void>) {
+    const button = parent.createEl("button", { cls: "twelve-icon-button" });
+    button.setAttr("aria-label", tooltip);
+    button.setAttr("title", tooltip);
+    setIcon(button, icon);
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await onClick();
+    });
+    return button;
+  }
+
+  private progressBar(parent: HTMLElement, ratio: number, variant: string) {
+    const track = parent.createDiv({ cls: "twelve-bar" });
+    const fill = track.createDiv({ cls: `twelve-bar-fill twelve-bar-${variant}` });
+    fill.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
+  }
+
+  private checkbox(parent: HTMLElement, checked: boolean, onToggle: () => void | Promise<void>): HTMLInputElement {
+    const cb = parent.createEl("input", { cls: "twelve-check" });
+    cb.type = "checkbox";
+    cb.checked = checked;
+    cb.addEventListener("change", () => onToggle());
+    return cb;
+  }
+
+  private projectName(fileName: string): string {
+    return fileName.replace(/\.md$/i, "");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cycle + task helpers
+  // ---------------------------------------------------------------------------
+
+  private async getCurrentCycle(): Promise<
+    { weekNumber: number; weekFile: TFile | null; weekPath: string; start: string; end: string } | null
+  > {
+    const currentFile = this.app.vault.getAbstractFileByPath(this.resolvePath("12wy/current.md"));
+    if (!(currentFile instanceof TFile)) {
+      return null;
+    }
+    const content = await this.app.vault.cachedRead(currentFile);
+    const dates = this.parseCurrentDates(content);
+    if (!dates) {
+      return null;
+    }
+    const startDate = this.parseDateToken(dates.start);
+    if (!startDate) {
+      return null;
+    }
+    const today = this.normalizeDate(new Date());
+    const weekNumber = Math.min(Math.max(this.compute12WYWeek(startDate, today), 1), 13);
+    const weekPath = this.resolvePath(`12wy/weeks/w${weekNumber.toString().padStart(2, "0")}.md`);
+    const weekAbstract = this.app.vault.getAbstractFileByPath(weekPath);
+    const weekFile = weekAbstract instanceof TFile ? weekAbstract : null;
+    return { weekNumber, weekFile, weekPath, start: dates.start, end: dates.end };
+  }
+
+  // Tasks to surface in the "today" list: visible today (or completed today so a
+  // just-checked item lingers with a strikethrough), excluding cycle scaffolding
+  // (the 12wy/ folder, whose commitments are rendered separately).
+  private getSurfacedTasks(): Task[] {
+    const today = this.normalizeDate(new Date());
+    const todayToken = this.formatDateToken(new Date());
+    return this.taskIndex
       .getTasks()
-      .filter((task) => this.isVisibleToday(task, today))
-      .filter((task) => !this.isExcludedPath(task.filePath));
+      .filter((task) => !this.isExcludedPath(task.filePath))
+      .filter((task) => !this.isCycleInfrastructure(task.filePath))
+      .filter(
+        (task) => this.isVisibleToday(task, today) || (task.status === "done" && task.done === todayToken)
+      );
+  }
 
-    const grouped = this.groupTasks(tasks);
+  private isCycleInfrastructure(path: string): boolean {
+    const root = this.getNormalizedRootFolder();
+    const prefix = root ? `${root}/` : "";
+    const rel = root && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    return rel.startsWith("12wy/");
+  }
 
-    if (!tasks.length) {
-      container.createEl("div", { text: "No tasks for today." });
+  private sortTasks(tasks: Task[]): Task[] {
+    const rank: Record<string, number> = { high: 0, med: 1, low: 2 };
+    return [...tasks].sort((a, b) => {
+      const pa = a.priority ? rank[a.priority] : 3;
+      const pb = b.priority ? rank[b.priority] : 3;
+      if (pa !== pb) {
+        return pa - pb;
+      }
+      const da = a.due ? this.parseDateToken(a.due)?.getTime() ?? Infinity : Infinity;
+      const db = b.due ? this.parseDateToken(b.due)?.getTime() ?? Infinity : Infinity;
+      if (da !== db) {
+        return da - db;
+      }
+      return a.text.localeCompare(b.text);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Today
+  // ---------------------------------------------------------------------------
+
+  private async renderToday(container: HTMLElement) {
+    const cycle = await this.getCurrentCycle();
+
+    if (cycle?.weekFile) {
+      const weekContent = await this.app.vault.cachedRead(cycle.weekFile);
+      const commitments = this.parseListSection(weekContent, "## Commitments");
+      const tracker = this.parseTableSection(weekContent, "## Daily Tracker");
+      this.renderCommitments(container, cycle.weekFile, cycle.weekNumber, commitments);
+      this.renderTracker(container, cycle.weekFile, tracker);
+    }
+
+    const surfaced = this.getSurfacedTasks();
+    const openCount = surfaced.filter((task) => task.status !== "done").length;
+    const body = this.section(container, "Other", openCount || undefined);
+    if (!surfaced.length) {
+      this.renderEmpty(body, "Nothing else surfaced for today.");
+      return;
+    }
+    this.renderTaskTable(body, this.sortTasks(surfaced), { actions: true, showProject: true });
+  }
+
+  private renderCommitments(container: HTMLElement, file: TFile, weekNumber: number, items: CommitItem[]) {
+    const done = items.filter((item) => item.status === "done").length;
+    const body = this.section(
+      container,
+      `Week ${weekNumber} Commitments`,
+      items.length ? `${done}/${items.length}` : undefined
+    );
+    if (!items.length) {
+      this.renderEmpty(body, "No commitments found for this week.");
+      return;
+    }
+    this.renderCheckList(body, file, items);
+  }
+
+  private renderTracker(
+    container: HTMLElement,
+    file: TFile,
+    tracker: { header: string[]; rows: string[][]; rowLines: number[] }
+  ) {
+    const body = this.section(container, "Tracker — Week So Far");
+    if (!tracker.header.length || !tracker.rows.length) {
+      this.renderEmpty(body, "No daily tracker table found.");
       return;
     }
 
-    for (const group of grouped) {
-      const groupEl = container.createEl("div", { cls: "twelve-group" });
-      groupEl.createEl("h3", { text: group.title });
-      group.tasks.forEach((task) => groupEl.appendChild(this.renderTaskRow(task, true)));
+    const today = this.normalizeDate(new Date());
+    const todayToken = this.formatDateToken(today);
+    const table = body.createEl("table", { cls: "twelve-tracker" });
+
+    const headRow = table.createEl("thead").createEl("tr");
+    tracker.header.forEach((column, idx) => {
+      const th = headRow.createEl("th", { text: column });
+      if (idx === 0) {
+        th.addClass("twelve-tracker-day");
+      }
+    });
+
+    const tbody = table.createEl("tbody");
+    tracker.rows.forEach((row, rowIndex) => {
+      const dayDate = this.parseDateToken(row[0]) || today;
+      if (dayDate.getTime() > today.getTime()) {
+        return; // don't render days that haven't happened yet
+      }
+      const tr = tbody.createEl("tr");
+      if (this.formatDateToken(dayDate) === todayToken) {
+        tr.addClass("is-today");
+      }
+      row.forEach((cell, cellIndex) => {
+        if (cellIndex === 0) {
+          tr.createEl("td", { cls: "twelve-tracker-day", text: cell });
+          return;
+        }
+        const td = tr.createEl("td", { cls: "twelve-tracker-cell" });
+        const checked = cell.trim().toUpperCase() === "Y";
+        this.checkbox(td, checked, async () => {
+          const lineIndex = tracker.rowLines[rowIndex];
+          if (lineIndex === undefined) {
+            return;
+          }
+          await this.updateTrackerCell(file, lineIndex, cellIndex, checked ? "" : "Y");
+        });
+      });
+    });
+  }
+
+  // A checkbox list with write-back and a styled leading [Tag] chip.
+  private renderCheckList(body: HTMLElement, file: TFile, items: CommitItem[]) {
+    if (!items.length) {
+      this.renderEmpty(body, "Nothing here.");
+      return;
+    }
+    const list = body.createDiv({ cls: "twelve-list" });
+    for (const item of items) {
+      const row = list.createDiv({ cls: "twelve-row" });
+      if (item.status === "done") {
+        row.addClass("is-done");
+      }
+      this.checkbox(row, item.status === "done", () => this.toggleListLine(file, item));
+      const textWrap = row.createDiv({ cls: "twelve-row-text" });
+      const tagMatch = /^\[([^\]]+)\]\s*(.*)$/.exec(item.text);
+      if (tagMatch) {
+        textWrap.createSpan({ cls: "twelve-tag", text: tagMatch[1] });
+        textWrap.createSpan({ text: tagMatch[2] });
+      } else {
+        textWrap.createSpan({ text: item.text });
+      }
+    }
+  }
+
+  // The task table used by Today/Forecast/Waiting/Projects/Recurring.
+  private renderTaskTable(
+    body: HTMLElement,
+    tasks: Task[],
+    opts: { actions?: boolean; showProject?: boolean; showDue?: boolean }
+  ) {
+    const table = body.createEl("table", { cls: "twelve-task-table" });
+    const tbody = table.createEl("tbody");
+    for (const task of tasks) {
+      const tr = tbody.createEl("tr", { cls: "twelve-task-tr" });
+      if (task.status === "done") {
+        tr.addClass("is-done");
+      }
+
+      const checkCell = tr.createEl("td", { cls: "twelve-cell-check" });
+      this.checkbox(checkCell, task.status === "done", () => this.toggleTaskDone(task));
+
+      const textCell = tr.createEl("td", { cls: "twelve-cell-text" });
+      textCell.createSpan({ text: task.text });
+      for (const marker of task.markers) {
+        if (marker === "TODAY") {
+          continue;
+        }
+        textCell.createSpan({ cls: "twelve-chip", text: marker.toLowerCase() });
+      }
+      textCell.setAttr("title", "Double-click to edit");
+      textCell.addEventListener("dblclick", () => this.editTaskText(task));
+
+      if (opts.showDue) {
+        tr.createEl("td", { cls: "twelve-cell-meta", text: task.due ?? "" });
+      }
+      if (opts.showProject) {
+        tr.createEl("td", { cls: "twelve-cell-project", text: this.projectName(task.fileName) });
+      }
+      if (opts.actions) {
+        const actions = tr.createEl("td", { cls: "twelve-cell-actions" });
+        this.iconButton(actions, "corner-up-left", "Remove from today", async () => {
+          await this.removeMarkerFromTask(task, "TODAY");
+        });
+        this.iconButton(actions, "arrow-right", "Defer to tomorrow", async () => {
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          await this.deferTask(task, this.formatDateToken(tomorrow));
+        });
+        this.iconButton(actions, "x", "Delete", () => this.deleteTask(task));
+      }
     }
   }
 
@@ -162,7 +465,7 @@ export default class TwelvePlugin extends Plugin {
     const tasks = this.taskIndex
       .getTasks()
       .filter((task) => task.due && task.status !== "done" && task.status !== "cancelled")
-      .filter((task) => !this.isExcludedPath(task.filePath))
+      .filter((task) => !this.isExcludedPath(task.filePath) && !this.isCycleInfrastructure(task.filePath))
       .sort((a, b) => {
         const aDate = this.parseDateToken(a.due!);
         const bDate = this.parseDateToken(b.due!);
@@ -170,7 +473,7 @@ export default class TwelvePlugin extends Plugin {
       });
 
     if (!tasks.length) {
-      container.createEl("div", { text: "No upcoming tasks found." });
+      this.renderEmpty(this.section(container, "Forecast"), "No upcoming tasks found.");
       return;
     }
 
@@ -187,99 +490,253 @@ export default class TwelvePlugin extends Plugin {
       if (!groupTasks?.length) {
         continue;
       }
-      const groupEl = container.createEl("div", { cls: "twelve-group" });
-      groupEl.createEl("h3", { text: title });
-      groupTasks.forEach((task) => groupEl.appendChild(this.renderForecastRow(task)));
+      const body = this.section(container, title, groupTasks.length);
+      this.renderTaskTable(body, groupTasks, { showDue: true, showProject: true });
     }
   }
 
-  private renderForecastRow(task: Task): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "twelve-task-row";
+  // ---------------------------------------------------------------------------
+  // Dashboard
+  // ---------------------------------------------------------------------------
 
-    const textEl = document.createElement("span");
-    textEl.className = "twelve-task-text";
-    textEl.textContent = task.text;
-    row.appendChild(textEl);
+  private async renderDashboard(container: HTMLElement) {
+    const cycle = await this.getCurrentCycle();
 
-    const dueEl = document.createElement("span");
-    dueEl.className = "twelve-task-meta";
-    dueEl.textContent = task.due ?? "no due date";
-    row.appendChild(dueEl);
+    const tasks = this.taskIndex.getTasks();
+    const open = (task: Task) => task.status !== "done" && task.status !== "cancelled";
+    const visiblePath = (path: string) => !this.isExcludedPath(path) && !this.isCycleInfrastructure(path);
+    const visible = (task: Task) => visiblePath(task.filePath);
 
-    const projectEl = document.createElement("span");
-    projectEl.className = "twelve-task-meta";
-    projectEl.textContent = ` ${task.fileName}`;
-    row.appendChild(projectEl);
+    const todayCount = this.getSurfacedTasks().filter((task) => task.status !== "done").length;
+    const waitingCount = tasks.filter((t) => visible(t) && open(t) && t.markers.includes("WAITING")).length;
+    const errandCount = await this.countErrands();
+    const forecastCount = tasks.filter((t) => visible(t) && open(t) && !!t.due).length;
+    const recurringCount = this.getRecurringTasks().length;
+    const projectCount = this.taskIndex
+      .getSnapshots()
+      .filter((s) => visiblePath(s.filePath) && s.tasks.some(open)).length;
+    const wyCount = this.taskIndex.getSnapshots().filter((s) => s.meta.is12WY).length;
 
-    return row;
+    const grid = container.createDiv({ cls: "twelve-dash-grid" });
+    this.dashCard(grid, "Today", todayCount, "today");
+    this.dashCard(grid, "12WY", wyCount, "12wy");
+    this.dashCard(grid, "Projects", projectCount, "projects");
+    this.dashCard(grid, "Waiting", waitingCount, "waiting");
+    this.dashCard(grid, "Errands", errandCount, "errands");
+    this.dashCard(grid, "Forecast", forecastCount, "forecast");
+    this.dashCard(grid, "Recurring", recurringCount, "recurring");
+
+    this.render12WYTable(container, cycle?.weekNumber ?? 1);
   }
 
-  private async renderMarkerView(container: HTMLElement, marker: string, title: string) {
+  private dashCard(grid: HTMLElement, title: string, count: number, view: string) {
+    const card = grid.createDiv({ cls: "twelve-card" });
+    card.createSpan({ cls: "twelve-card-title", text: title });
+    if (count > 0) {
+      card.createSpan({ cls: "twelve-badge", text: String(count) });
+    }
+    card.addEventListener("click", () => this.openView(view));
+  }
+
+  private render12WYTable(container: HTMLElement, weekNumber: number) {
+    const projects = this.taskIndex
+      .getSnapshots()
+      .filter((s) => s.meta.is12WY)
+      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+
+    const body = this.section(container, "12 Week Year");
+    if (!projects.length) {
+      this.renderEmpty(body, "No 12WY projects found.");
+      return;
+    }
+
+    const table = body.createEl("table", { cls: "twelve-wy-table" });
+    const headRow = table.createEl("thead").createEl("tr");
+    headRow.createEl("th", { text: "Project" });
+    headRow.createEl("th", { text: "Progress (done / target)" });
+    headRow.createEl("th", { cls: "twelve-wy-open", text: "Open" });
+
+    const tbody = table.createEl("tbody");
+    for (const project of projects) {
+      const tr = tbody.createEl("tr");
+      tr.createEl("td", { cls: "twelve-wy-name", text: this.projectName(project.fileName) });
+
+      const progCell = tr.createEl("td", { cls: "twelve-wy-progress" });
+      if (!project.meta.progress.length) {
+        progCell.createSpan({ cls: "twelve-faint", text: "—" });
+      } else {
+        for (const metric of project.meta.progress) {
+          const line = progCell.createDiv({ cls: "twelve-metric" });
+          const label = metric.label ? ` ${metric.label}` : "";
+          line.createSpan({ cls: "twelve-metric-label", text: `${metric.current} / ${metric.target}${label}` });
+          const expected = Math.max(1, Math.round((weekNumber / 12) * metric.target));
+          const variant = this.paceVariant(metric.current, expected);
+          this.progressBar(line, metric.target ? metric.current / metric.target : 0, variant);
+        }
+      }
+
+      const openTasks = project.tasks.filter((t) => t.status !== "done" && t.status !== "cancelled").length;
+      tr.createEl("td", { cls: "twelve-wy-open", text: String(openTasks) });
+    }
+  }
+
+  private paceVariant(current: number, expected: number): string {
+    const ratio = expected > 0 ? current / expected : 1;
+    return ratio >= 1 ? "good" : ratio >= 0.75 ? "warning" : "danger";
+  }
+
+  // ---------------------------------------------------------------------------
+  // View-note navigation (dashboard cards open the note holding that view block)
+  // ---------------------------------------------------------------------------
+
+  private viewNoteMap: Map<string, string> | null = null;
+
+  private async openView(view: string) {
+    const file = await this.findViewNote(view);
+    if (file) {
+      await this.app.workspace.getLeaf(false).openFile(file);
+    } else {
+      new Notice(`No note containing a \`12 ${view}\` block was found.`);
+    }
+  }
+
+  private async findViewNote(view: string): Promise<TFile | null> {
+    if (!this.viewNoteMap) {
+      await this.buildViewNoteMap();
+    }
+    const path = this.viewNoteMap?.get(view);
+    if (!path) {
+      return null;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile ? file : null;
+  }
+
+  private async buildViewNoteMap() {
+    const map = new Map<string, string>();
+    const fenceRe = /(?:^|\n)\s*`{3,}\s*12\s+(\w+)/g;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      let content: string;
+      try {
+        content = await this.app.vault.cachedRead(file);
+      } catch {
+        continue;
+      }
+      if (!content.includes("```")) {
+        continue;
+      }
+      fenceRe.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = fenceRe.exec(content)) !== null) {
+        const name = match[1].toLowerCase();
+        if (!map.has(name)) {
+          map.set(name, file.path);
+        }
+      }
+    }
+    this.viewNoteMap = map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Waiting + Errands
+  // ---------------------------------------------------------------------------
+
+  private async renderWaiting(container: HTMLElement) {
     const tasks = this.taskIndex
       .getTasks()
-      .filter((task) => task.markers.includes(marker))
-      .filter((task) => !this.isExcludedPath(task.filePath));
+      .filter((task) => task.markers.includes("WAITING") && task.status !== "done" && task.status !== "cancelled")
+      .filter((task) => !this.isExcludedPath(task.filePath) && !this.isCycleInfrastructure(task.filePath));
 
+    const body = this.section(container, "Waiting", tasks.length || undefined);
     if (!tasks.length) {
-      container.createEl("div", { text: `No ${title.toLowerCase()} tasks found.` });
+      this.renderEmpty(body, "Nothing is waiting.");
       return;
     }
-
-    const groupEl = container.createEl("div", { cls: "twelve-group" });
-    groupEl.createEl("h3", { text: title });
-    tasks.forEach((task) => groupEl.appendChild(this.renderTaskRow(task)));
+    this.renderTaskTable(body, this.sortTasks(tasks), { showProject: true });
   }
 
-  private async renderProjects(container: HTMLElement) {
-    const projectMap = new Map<string, { fileName: string; is12WY: boolean; isTravel: boolean; tasks: Task[] }>();
-
-    for (const task of this.taskIndex.getTasks()) {
-      if (task.status === "done" || task.status === "cancelled") {
-        continue;
-      }
-      if (this.isExcludedPath(task.filePath)) {
-        continue;
-      }
-
-      const project = projectMap.get(task.filePath);
-      if (project) {
-        project.tasks.push(task);
-        continue;
-      }
-
-      projectMap.set(task.filePath, {
-        fileName: task.fileName,
-        is12WY: task.projectIs12WY,
-        isTravel: false,
-        tasks: [task],
-      });
-    }
-
-    if (!projectMap.size) {
-      container.createEl("div", { text: "No active projects found." });
+  private async renderErrands(container: HTMLElement) {
+    const path = this.resolvePath("errands.md");
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) {
+      this.renderEmpty(this.section(container, "Errands"), `Unable to locate ${path}.`);
       return;
     }
+    const content = await this.app.vault.cachedRead(file);
+    const sections = this.parseHeadingSections(content);
+    if (!sections.length) {
+      this.renderEmpty(this.section(container, "Errands"), "No errand sections found.");
+      return;
+    }
+    for (const sec of sections) {
+      const open = sec.items.filter((item) => item.status !== "done").length;
+      const body = this.section(container, sec.title.toUpperCase(), open || undefined);
+      this.renderCheckList(body, file, sec.items);
+    }
+  }
 
-    const projectEntries = await Promise.all(
-      Array.from(projectMap.entries()).map(async ([filePath, project]) => {
-        const file = this.app.vault.getAbstractFileByPath(filePath);
-        let isTravel = false;
+  // Parse a markdown file into heading-delimited sections of checkbox items.
+  private parseHeadingSections(text: string): Array<{ title: string; items: CommitItem[] }> {
+    const lines = text.split(/\r?\n/);
+    const sections: Array<{ title: string; items: CommitItem[] }> = [];
+    let current: { title: string; items: CommitItem[] } | null = null;
 
-        if (file instanceof TFile) {
-          const content = await this.app.vault.read(file);
-          isTravel = /\*\*Status:\*\*.*\[TRAVEL\]/i.test(content);
-        }
+    for (let i = 0; i < lines.length; i++) {
+      const headingMatch = /^#{2,6}\s+(.*)$/.exec(lines[i]);
+      if (headingMatch) {
+        current = { title: headingMatch[1].trim(), items: [] };
+        sections.push(current);
+        continue;
+      }
+      const taskMatch = /^\s*[-*]\s*\[([ xX/\-])\]\s*(.*)$/.exec(lines[i]);
+      if (taskMatch && current) {
+        current.items.push({
+          lineNumber: i,
+          text: taskMatch[2],
+          status: taskMatch[1].toLowerCase() === "x" ? "done" : "todo",
+          lineText: lines[i],
+        });
+      }
+    }
 
-        return {
-          filePath,
-          fileName: project.fileName,
-          is12WY: project.is12WY,
-          isTravel,
-          tasks: project.tasks,
-        };
-      })
+    return sections.filter((sec) => sec.items.length > 0);
+  }
+
+  private async countErrands(): Promise<number> {
+    const file = this.app.vault.getAbstractFileByPath(this.resolvePath("errands.md"));
+    if (!(file instanceof TFile)) {
+      return 0;
+    }
+    const content = await this.app.vault.cachedRead(file);
+    return this.parseHeadingSections(content).reduce(
+      (sum, sec) => sum + sec.items.filter((item) => item.status !== "done").length,
+      0
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Projects + Recurring
+  // ---------------------------------------------------------------------------
+
+  private async renderProjects(container: HTMLElement) {
+    // Drive project grouping off the cached index snapshots so we don't re-read
+    // every project file from disk on each render.
+    const projectEntries = this.taskIndex
+      .getSnapshots()
+      .filter((snapshot) => !this.isExcludedPath(snapshot.filePath) && !this.isCycleInfrastructure(snapshot.filePath))
+      .map((snapshot) => ({
+        filePath: snapshot.filePath,
+        fileName: snapshot.fileName,
+        is12WY: snapshot.meta.is12WY,
+        isTravel: snapshot.meta.isTravel,
+        tasks: snapshot.tasks.filter((task) => task.status !== "done" && task.status !== "cancelled"),
+      }))
+      .filter((project) => project.tasks.length > 0);
+
+    if (!projectEntries.length) {
+      this.renderEmpty(this.section(container, "Projects"), "No active projects found.");
+      return;
+    }
 
     const groups = [
       { title: "12WY Projects", items: projectEntries.filter((p) => p.is12WY) },
@@ -291,207 +748,66 @@ export default class TwelvePlugin extends Plugin {
       if (!group.items.length) {
         continue;
       }
-
-      const groupEl = container.createEl("div", { cls: "twelve-group" });
-      groupEl.createEl("h3", { text: group.title });
-
+      const body = this.section(container, group.title, group.items.length);
       for (const project of group.items.sort((a, b) => a.fileName.localeCompare(b.fileName))) {
-        const projectEl = groupEl.createEl("div", { cls: "twelve-project" });
-        projectEl.createEl("strong", { text: `${project.fileName} (${project.tasks.length} open)` });
-
-        project.tasks.forEach((task) => projectEl.appendChild(this.renderTaskRow(task)));
+        const block = body.createDiv({ cls: "twelve-project" });
+        const head = block.createDiv({ cls: "twelve-project-head" });
+        head.createSpan({ cls: "twelve-project-name", text: this.projectName(project.fileName) });
+        head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${project.tasks.length} open` });
+        this.renderTaskTable(block, this.sortTasks(project.tasks), { showProject: false });
       }
     }
   }
 
+  private getRecurringTasks(): Task[] {
+    return this.taskIndex
+      .getTasks()
+      .filter((task) => task.every && task.status !== "done" && task.status !== "cancelled")
+      .filter((task) => !this.isExcludedPath(task.filePath));
+  }
+
+  private async renderRecurring(container: HTMLElement) {
+    const tasks = this.getRecurringTasks().sort(
+      (a, b) =>
+        (this.parseDateToken(a.due ?? "")?.getTime() ?? Infinity) -
+        (this.parseDateToken(b.due ?? "")?.getTime() ?? Infinity)
+    );
+    const body = this.section(container, "Recurring", tasks.length || undefined);
+    if (!tasks.length) {
+      this.renderEmpty(body, "No recurring tasks found.");
+      return;
+    }
+    this.renderTaskTable(body, tasks, { showDue: true, showProject: true });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 12WY cycle detail (pace table + this week's commitments + tracker)
+  // ---------------------------------------------------------------------------
+
   private async render12WY(container: HTMLElement) {
-    const currentFile = this.app.vault.getAbstractFileByPath(this.resolvePath("12wy/current.md"));
-    if (!(currentFile instanceof TFile)) {
-      container.createEl("div", { text: `Unable to locate ${this.resolvePath("12wy/current.md")}.` });
+    const cycle = await this.getCurrentCycle();
+    if (!cycle) {
+      this.renderEmpty(
+        this.section(container, "12 Week Year"),
+        `Unable to read ${this.resolvePath("12wy/current.md")} — it needs a "**Dates:** YYYY-MM-DD to YYYY-MM-DD" line.`
+      );
       return;
     }
 
-    const currentContent = await this.app.vault.read(currentFile);
-    const currentDates = this.parseCurrentDates(currentContent);
-    if (!currentDates) {
-      container.createEl("div", { text: "Unable to parse current 12WY cycle dates." });
-      return;
-    }
+    const head = this.section(container, `12WY · Week ${cycle.weekNumber}`);
+    head.createDiv({ cls: "twelve-faint", text: `Cycle: ${cycle.start} → ${cycle.end}` });
 
-    const today = this.normalizeDate(new Date());
-    const startDate = this.parseDateToken(currentDates.start);
-    if (!startDate) {
-      container.createEl("div", { text: "Unable to parse 12WY start date." });
-      return;
-    }
+    this.render12WYTable(container, cycle.weekNumber);
 
-    const currentWeek = this.compute12WYWeek(startDate, today);
-    const weekNumber = Math.min(Math.max(currentWeek, 1), 13);
-    const weekFilePath = this.resolvePath(`12wy/weeks/w${weekNumber.toString().padStart(2, "0")}.md`);
-    const weekFile = this.app.vault.getAbstractFileByPath(weekFilePath);
-
-    const paceItems = await this.collect12WYPace(weekNumber);
-
-    const summaryEl = container.createEl("div", { cls: "twelve-group" });
-    summaryEl.createEl("h3", { text: `12WY Week ${weekNumber}` });
-    summaryEl.createEl("div", { text: `Cycle: ${currentDates.start} → ${currentDates.end}` });
-    const executionEl = summaryEl.createEl("div", { text: "Execution: calculating..." });
-
-    const paceGroup = container.createEl("div", { cls: "twelve-group" });
-    paceGroup.createEl("h4", { text: "Project pace" });
-    if (!paceItems.paceRows.length) {
-      paceGroup.createEl("div", { text: "No 12WY project progress lines found." });
+    if (cycle.weekFile) {
+      const weekContent = await this.app.vault.cachedRead(cycle.weekFile);
+      const commitments = this.parseListSection(weekContent, "## Commitments");
+      const tracker = this.parseTableSection(weekContent, "## Daily Tracker");
+      this.renderCommitments(container, cycle.weekFile, cycle.weekNumber, commitments);
+      this.renderTracker(container, cycle.weekFile, tracker);
     } else {
-      paceItems.paceRows.forEach((row) => {
-        const rowEl = paceGroup.createEl("div", { cls: `twelve-pace-row twelve-pace-${row.status}` });
-        rowEl.textContent = `${row.fileName}: ${row.current}/${row.target} (expected ${row.expected})`;
-      });
+      this.renderEmpty(this.section(container, "This Week"), `Unable to locate ${cycle.weekPath}.`);
     }
-
-    if (!(weekFile instanceof TFile)) {
-      container.createEl("div", { text: `Unable to locate ${weekFilePath}.` });
-      return;
-    }
-
-    const weekContent = await this.app.vault.read(weekFile);
-    const commitBlock = this.parseListSection(weekContent, "## Commitments");
-    const trackerBlock = this.parseTableSection(weekContent, "## Daily Tracker");
-    const commitmentsDone = commitBlock.filter((item) => item.status === "done").length;
-    const commitmentsTotal = commitBlock.length;
-    const executionPercent = commitmentsTotal ? (commitmentsDone / commitmentsTotal) * 100 : 0;
-    executionEl.textContent = `Execution: ${executionPercent.toFixed(0)}% (${commitmentsDone}/${commitmentsTotal})`;
-
-    const commitGroup = container.createEl("div", { cls: "twelve-group" });
-    commitGroup.createEl("h4", { text: "Commitments" });
-    if (!commitBlock.length) {
-      commitGroup.createEl("div", { text: "No commitments section found." });
-    } else {
-      commitBlock.forEach((item) => {
-        const taskRow = document.createElement("div");
-        taskRow.className = "twelve-task-row";
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = item.status === "done";
-        checkbox.addEventListener("change", async () => {
-          await this.toggleListLine(weekFile, item);
-        });
-        taskRow.appendChild(checkbox);
-
-        const textEl = document.createElement("span");
-        textEl.className = "twelve-task-text";
-        textEl.textContent = item.text;
-        taskRow.appendChild(textEl);
-
-        commitGroup.appendChild(taskRow);
-      });
-    }
-
-    const trackerGroup = container.createEl("div", { cls: "twelve-group" });
-    trackerGroup.createEl("h4", { text: "Daily Tracker" });
-    if (!trackerBlock.header.length || !trackerBlock.rows.length) {
-      trackerGroup.createEl("div", { text: "Unable to parse daily tracker table." });
-    } else {
-      const tableEl = document.createElement("div");
-      tableEl.className = "twelve-grid";
-      const headerRow = document.createElement("div");
-      headerRow.className = "twelve-grid-row twelve-grid-header";
-      trackerBlock.header.forEach((column) => {
-        const headerCell = document.createElement("div");
-        headerCell.className = "twelve-grid-cell";
-        headerCell.textContent = column;
-        headerRow.appendChild(headerCell);
-      });
-      tableEl.appendChild(headerRow);
-
-      trackerBlock.rows.forEach((row, rowIndex) => {
-        const lineDate = this.parseDateToken(row[0]) || today;
-        if (lineDate.getTime() > today.getTime()) {
-          return;
-        }
-
-        const rowEl = document.createElement("div");
-        rowEl.className = "twelve-grid-row";
-
-        row.forEach((cell, cellIndex) => {
-          const cellEl = document.createElement("div");
-          cellEl.className = "twelve-grid-cell";
-          cellEl.textContent = cell || " ";
-          if (cellIndex > 0) {
-            cellEl.classList.add("twelve-grid-clickable");
-            cellEl.addEventListener("click", async () => {
-              const lineIndex = trackerBlock.rowLines[rowIndex];
-              if (lineIndex !== undefined) {
-                await this.updateTrackerCell(weekFile, lineIndex, cellIndex, "Y");
-              }
-            });
-          }
-          rowEl.appendChild(cellEl);
-        });
-
-        tableEl.appendChild(rowEl);
-      });
-
-      trackerGroup.appendChild(tableEl);
-    }
-  }
-
-  private renderTaskRow(task: Task, includeActions = false): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "twelve-task-row";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = task.status === "done";
-    checkbox.addEventListener("change", async () => {
-      await this.toggleTaskDone(task);
-    });
-    row.appendChild(checkbox);
-
-    const textEl = document.createElement("span");
-    textEl.className = "twelve-task-text";
-    textEl.textContent = `${task.text} ${task.markers.map((m) => `[${m}]`).join(" ")}`.trim();
-    row.appendChild(textEl);
-
-    const metaEl = document.createElement("span");
-    metaEl.className = "twelve-task-meta";
-    const metaParts = [task.fileName, task.due ? `due:${task.due}` : undefined].filter(Boolean);
-    metaEl.textContent = ` ${metaParts.join(" · ")}`;
-    row.appendChild(metaEl);
-
-    if (includeActions) {
-      const actionsEl = document.createElement("span");
-      actionsEl.className = "twelve-task-actions";
-      actionsEl.appendChild(this.createActionButton("Remove TODAY", async () => {
-        const updatedTask = await this.removeMarkerFromTask(task, "TODAY");
-        if (updatedTask && !this.isVisibleToday(updatedTask, new Date())) {
-          row.remove();
-        }
-      }));
-      actionsEl.appendChild(this.createActionButton("Tomorrow", async () => {
-        const updatedTask = await this.deferTask(task, "tomorrow");
-        if (updatedTask && !this.isVisibleToday(updatedTask, new Date())) {
-          row.remove();
-        }
-      }));
-      actionsEl.appendChild(this.createActionButton("Delete", async () => await this.deleteTask(task)));
-      actionsEl.appendChild(this.createActionButton("Edit", async () => await this.editTaskText(task)));
-      row.appendChild(actionsEl);
-    }
-
-    return row;
-  }
-
-  private createActionButton(label: string, onClick: () => Promise<void>): HTMLElement {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "twelve-action-button";
-    button.textContent = label;
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      await onClick();
-    });
-    return button;
   }
 
   private async toggleTaskDone(task: Task) {
@@ -569,6 +885,16 @@ export default class TwelvePlugin extends Plugin {
       return;
     }
 
+    // Deletion removes a line from the user's note and has no undo here, so
+    // confirm first (mobile-safe modal rather than window.confirm).
+    const confirmed = await this.confirm(
+      "Delete task?",
+      `This permanently removes the line from ${task.fileName}:\n\n${task.text}`
+    );
+    if (!confirmed) {
+      return;
+    }
+
     const content = await this.app.vault.read(file);
     const lines = content.split(/\r?\n/);
     const lineIndex = this.findLineIndex(lines, task);
@@ -580,7 +906,6 @@ export default class TwelvePlugin extends Plugin {
     lines.splice(lineIndex, 1);
     await this.writeLinesToFile(file, lines);
     await this.taskIndex.updateFile(file);
-    this.refreshPreview();
   }
 
   private async editTaskText(task: Task) {
@@ -589,13 +914,29 @@ export default class TwelvePlugin extends Plugin {
       return;
     }
 
-    const newText = window.prompt("Edit task text:", task.text);
-    if (newText === null || newText.trim() === task.text) {
+    const newText = await this.promptText("Edit task text", task.text);
+    if (newText === null) {
+      return;
+    }
+    const trimmed = newText.trim();
+    if (!trimmed || trimmed === task.text) {
       return;
     }
 
-    const updatedTask: Task = { ...task, text: newText.trim() };
+    const updatedTask: Task = { ...task, text: trimmed };
     await this.replaceTaskLine(file, task, serializeTask(updatedTask));
+  }
+
+  private promptText(title: string, initial: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      new PromptModal(this.app, title, initial, resolve).open();
+    });
+  }
+
+  private confirm(title: string, message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      new ConfirmModal(this.app, title, message, resolve).open();
+    });
   }
 
   private async replaceTaskLine(file: TFile, task: Task, serializedLine: string) {
@@ -646,7 +987,7 @@ export default class TwelvePlugin extends Plugin {
     await this.app.vault.modify(file, lines.join("\n"));
   }
 
-  private async toggleListLine(file: TFile, item: { lineNumber: number; text: string; status: string }) {
+  private async toggleListLine(file: TFile, item: CommitItem) {
     const content = await this.app.vault.read(file);
     const lines = content.split(/\r?\n/);
     if (lines[item.lineNumber] !== item.lineText) {
@@ -658,7 +999,6 @@ export default class TwelvePlugin extends Plugin {
     lines[item.lineNumber] = updatedLine;
     await this.writeLinesToFile(file, lines);
     await this.taskIndex.updateFile(file);
-    this.refreshPreview();
   }
 
   private async updateTrackerCell(file: TFile, lineIndex: number, cellIndex: number, value: string) {
@@ -666,28 +1006,46 @@ export default class TwelvePlugin extends Plugin {
     const lines = content.split(/\r?\n/);
     const line = lines[lineIndex];
     if (!line) {
+      new Notice("Unable to locate tracker row.");
       return;
     }
 
-    const cells = line.split("|").map((cell) => cell.trim());
-    if (cellIndex >= cells.length) {
+    // Operate on the same leading/trailing-trimmed cell model the renderer uses
+    // so `cellIndex` lines up regardless of how the table row is padded.
+    const cells = this.splitTableRow(line);
+    if (cellIndex < 0 || cellIndex >= cells.length) {
       return;
     }
 
     cells[cellIndex] = value;
-    lines[lineIndex] = `| ${cells.slice(1, -1).join(" | ")} |`;
+    lines[lineIndex] = `| ${cells.join(" | ")} |`;
     await this.writeLinesToFile(file, lines);
-    this.refreshPreview();
+    await this.taskIndex.updateFile(file);
   }
 
-  private parseListSection(text: string, heading: string): Array<{ lineNumber: number; text: string; status: string }> {
+  // Split a markdown table row into content cells, dropping only the single
+  // empty segment produced by the leading and trailing pipe. Interior empty
+  // cells are preserved — they're meaningful in the tracker (an unchecked day),
+  // and dropping them would misalign data rows against the header.
+  private splitTableRow(line: string): string[] {
+    const cells = line.split("|").map((cell) => cell.trim());
+    if (cells.length && cells[0] === "") {
+      cells.shift();
+    }
+    if (cells.length && cells[cells.length - 1] === "") {
+      cells.pop();
+    }
+    return cells;
+  }
+
+  private parseListSection(text: string, heading: string): CommitItem[] {
     const lines = text.split(/\r?\n/);
     const start = lines.findIndex((line) => line.trim().toLowerCase() === heading.toLowerCase());
     if (start === -1) {
       return [];
     }
 
-    const items: Array<{ lineNumber: number; text: string; status: string }> = [];
+    const items: CommitItem[] = [];
     for (let i = start + 1; i < lines.length; i++) {
       const line = lines[i];
       if (/^##\s+/.test(line)) {
@@ -702,11 +1060,16 @@ export default class TwelvePlugin extends Plugin {
     return items;
   }
 
-  private parseTableSection(text: string, heading: string) {
+  private parseTableSection(text: string, heading: string): {
+    header: string[];
+    rows: string[][];
+    rowLines: number[];
+    startLine: number;
+  } {
     const lines = text.split(/\r?\n/);
     const start = lines.findIndex((line) => line.trim().toLowerCase() === heading.toLowerCase());
     if (start === -1) {
-      return { header: [] as string[], rows: [] as string[][], startLine: -1 };
+      return { header: [], rows: [], rowLines: [], startLine: -1 };
     }
 
     let header: string[] = [];
@@ -724,10 +1087,9 @@ export default class TwelvePlugin extends Plugin {
         break;
       }
       if (!header.length) {
-        header = rawLine.split("|").map((cell) => cell.trim()).filter((cell) => cell.length > 0);
+        header = this.splitTableRow(rawLine);
       } else if (!/^\|?\s*-+/.test(line)) {
-        const cells = rawLine.split("|").map((cell) => cell.trim());
-        rows.push(cells);
+        rows.push(this.splitTableRow(rawLine));
         rowLines.push(currentLine);
       }
       currentLine++;
@@ -748,42 +1110,6 @@ export default class TwelvePlugin extends Plugin {
     const msPerDay = 1000 * 60 * 60 * 24;
     const dayIndex = Math.floor((today.getTime() - startDate.getTime()) / msPerDay);
     return Math.floor(dayIndex / 7) + 1;
-  }
-
-  private async collect12WYPace(weekNumber: number) {
-    const files = this.app.vault.getMarkdownFiles();
-    const paceRows: Array<{ fileName: string; current: number; target: number; expected: number; status: string }> = [];
-    let commitmentsDone = 0;
-    let commitmentsTotal = 0;
-
-    for (const file of files) {
-      if (this.isExcludedPath(file.path)) {
-        continue;
-      }
-      const content = await this.app.vault.read(file);
-      if (/\*\*Status:\*\*.*\[12WY\]/i.test(content)) {
-        const match = /\*\*12WY Progress:\*\*\s*(\d+)\s*\/\s*(\d+)/i.exec(content);
-        if (match) {
-          const current = Number(match[1]);
-          const target = Number(match[2]);
-          const expected = Math.max(1, Math.round((weekNumber / 12) * target));
-          const ratio = target > 0 ? current / expected : 1;
-          const status = ratio >= 1 ? "good" : ratio >= 0.75 ? "warning" : "danger";
-          paceRows.push({ fileName: file.name, current, target, expected, status });
-        }
-      }
-
-      const commitMatches = content.matchAll(/[-*]\s*\[(x| )\]\s.*$/gim);
-      for (const match of commitMatches) {
-        commitmentsTotal += 1;
-        if (match[1].toLowerCase() === "x") {
-          commitmentsDone += 1;
-        }
-      }
-    }
-
-    const executionPercent = commitmentsTotal ? (commitmentsDone / commitmentsTotal) * 100 : 0;
-    return { paceRows, commitmentsDone, commitmentsTotal, executionPercent };
   }
 
   private computeNextRecurringDue(interval: string, currentDue: string, reference: Date): string | undefined {
@@ -882,12 +1208,10 @@ export default class TwelvePlugin extends Plugin {
 
   private parseDateToken(token: string): Date | undefined {
     const normalized = token.trim();
-    const monthMatch = /^\d{4}-\d{2}$/; 
-    if (monthMatch.test(normalized)) {
+    if (/^\d{4}-\d{2}$/.test(normalized)) {
       return new Date(`${normalized}-01T00:00:00`);
     }
-    const dayMatch = /^\d{4}-\d{2}-\d{2}$/;
-    if (dayMatch.test(normalized)) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
       return new Date(`${normalized}T00:00:00`);
     }
     if (normalized.toLowerCase() === "tomorrow") {
@@ -895,29 +1219,22 @@ export default class TwelvePlugin extends Plugin {
       tomorrow.setDate(tomorrow.getDate() + 1);
       return this.normalizeDate(tomorrow);
     }
+    // Tracker day labels like "M 06/01" or "06/01" — assume the current year so
+    // the "days up to today" filter works on the daily tracker.
+    const shortMatch = /^(?:[A-Za-z]{1,3}\s+)?(\d{1,2})\/(\d{1,2})$/.exec(normalized);
+    if (shortMatch) {
+      const year = new Date().getFullYear();
+      const month = Number(shortMatch[1]);
+      const day = Number(shortMatch[2]);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return new Date(year, month - 1, day);
+      }
+    }
     return undefined;
   }
 
   private normalizeDate(value: Date): Date {
     return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  private groupTasks(tasks: Task[]) {
-    const groups: { title: string; tasks: Task[] }[] = [];
-    const twelveWY = tasks.filter((task) => task.projectIs12WY);
-    const waiting = tasks.filter((task) => task.markers.includes("WAITING") && !task.projectIs12WY);
-    const others = tasks.filter((task) => !task.projectIs12WY && !task.markers.includes("WAITING"));
-
-    if (twelveWY.length) {
-      groups.push({ title: "12WY Projects", tasks: twelveWY });
-    }
-    if (others.length) {
-      groups.push({ title: "Other Projects", tasks: others });
-    }
-    if (waiting.length) {
-      groups.push({ title: "Waiting", tasks: waiting });
-    }
-    return groups;
   }
 
   private isIncludedPath(path: string): boolean {
@@ -964,7 +1281,7 @@ export default class TwelvePlugin extends Plugin {
     return this.settings.rootFolder.trim().replace(/^\/+|\/+$/g, "");
   }
 
-  private refreshPreview() {
+  private refreshPreviewNow() {
     const workspaceAny = this.app.workspace as any;
     if (typeof workspaceAny.requestMarkdownPreviewRefresh === "function") {
       workspaceAny.requestMarkdownPreviewRefresh();
@@ -993,6 +1310,10 @@ class TwelveSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "12 Plugin Settings" });
 
+    // Saving rebuilds the whole index (re-reads matching files), so debounce
+    // the root-folder text box rather than rebuilding on every keystroke.
+    const saveRootFolder = debounce(() => this.plugin.saveSettings(), 500, true);
+
     new Setting(containerEl)
       .setName("Root folder")
       .setDesc("Limit task discovery to a vault subfolder. Leave empty to use the vault root.")
@@ -1000,9 +1321,9 @@ class TwelveSettingTab extends PluginSettingTab {
         text
           .setPlaceholder("projects - active")
           .setValue(this.plugin.settings.rootFolder)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.rootFolder = value;
-            await this.plugin.saveSettings();
+            saveRootFolder();
           })
       );
 
@@ -1029,5 +1350,111 @@ class TwelveSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+  }
+}
+
+class PromptModal extends Modal {
+  private settled = false;
+
+  constructor(
+    app: App,
+    private title: string,
+    private initial: string,
+    private onResult: (value: string | null) => void
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+
+    const input = contentEl.createEl("input", { type: "text" });
+    input.value = this.initial;
+    input.classList.add("twelve-prompt-input");
+    input.focus();
+    input.select();
+
+    const submit = () => {
+      if (this.settled) {
+        return;
+      }
+      this.settled = true;
+      const value = input.value;
+      this.close();
+      this.onResult(value);
+    };
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.close();
+      }
+    });
+
+    const buttons = contentEl.createDiv({ cls: "twelve-modal-buttons" });
+    const save = buttons.createEl("button", { text: "Save" });
+    save.classList.add("mod-cta");
+    save.addEventListener("click", submit);
+    const cancel = buttons.createEl("button", { text: "Cancel" });
+    cancel.addEventListener("click", () => this.close());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    if (!this.settled) {
+      this.settled = true;
+      this.onResult(null);
+    }
+  }
+}
+
+class ConfirmModal extends Modal {
+  private settled = false;
+
+  constructor(
+    app: App,
+    private title: string,
+    private message: string,
+    private onResult: (confirmed: boolean) => void
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+    this.message.split("\n").forEach((line) => {
+      contentEl.createEl("p", { text: line });
+    });
+
+    const settle = (confirmed: boolean) => {
+      if (this.settled) {
+        return;
+      }
+      this.settled = true;
+      this.close();
+      this.onResult(confirmed);
+    };
+
+    const buttons = contentEl.createDiv({ cls: "twelve-modal-buttons" });
+    const confirm = buttons.createEl("button", { text: "Delete" });
+    confirm.classList.add("mod-warning");
+    confirm.addEventListener("click", () => settle(true));
+    const cancel = buttons.createEl("button", { text: "Cancel" });
+    cancel.classList.add("mod-cta");
+    cancel.addEventListener("click", () => settle(false));
+    cancel.focus();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    if (!this.settled) {
+      this.settled = true;
+      this.onResult(false);
+    }
   }
 }
