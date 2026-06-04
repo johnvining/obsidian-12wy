@@ -8,6 +8,7 @@
   align-items: center;
   gap: 0.75rem;
   margin: 0.35rem 0;
+  flex-wrap: wrap;
 }
 .twelve-task-text {
   flex: 1;
@@ -16,4 +17,54 @@
 .twelve-task-meta {
   color: var(--text-faint);
   font-size: 0.9rem;
+}
+.twelve-task-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.twelve-action-button {
+  background: var(--background-modifier-border);
+  border: 1px solid var(--interactive-accent);
+  color: var(--text-normal);
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+.twelve-action-button:hover {
+  background: var(--background-secondary);
+}
+.twelve-grid {
+  display: grid;
+  gap: 0.25rem;
+}
+.twelve-grid-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: 0.25rem;
+}
+.twelve-grid-header {
+  font-weight: 700;
+}
+.twelve-grid-cell {
+  padding: 0.5rem;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 0.25rem;
+  min-height: 2rem;
+}
+.twelve-grid-clickable {
+  cursor: pointer;
+  background: var(--background-modifier-hover);
+}
+.twelve-pace-row {
+  margin: 0.2rem 0;
+}
+.twelve-pace-good {
+  color: var(--success);
+}
+.twelve-pace-warning {
+  color: var(--warning);
+}
+.twelve-pace-danger {
+  color: var(--danger);
 }
