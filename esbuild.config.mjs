@@ -2,11 +2,12 @@ import { build } from "esbuild";
 import fs from "fs";
 import path from "path";
 
-const outDir = path.resolve(process.cwd(), ".obsidian/plugins/12");
+const outDir = path.resolve(process.cwd(), ".obsidian/plugins/task-12");
 await build({
   entryPoints: [path.resolve(process.cwd(), "src/main.ts")],
   bundle: true,
   platform: "browser",
+  format: "cjs",
   target: ["es2020"],
   outfile: path.join(outDir, "main.js"),
   sourcemap: "inline",

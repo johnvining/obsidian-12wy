@@ -2,8 +2,10 @@ import { App, MetadataCache, TFile, Vault } from "obsidian";
 import { parseTaskLine, serializeTask } from "./parser";
 import type { Task } from "./types";
 
-const INCLUDED_PROJECT_PREFIXES = ["projects - active/", "12wy/"];
-const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md"]);
+const ACTIVE_PROJECT_FOLDER = "projects - active/";
+const TWELVE_WY_FOLDER = "12wy/";
+const TICKLER_FOLDER = "tickler/";
+const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
 const EXCLUDED_PROJECT_PREFIXES = ["projects - archive/", "projects - new 12wy/"];
 
 export type TaskIndexUpdateHandler = () => void;
@@ -12,7 +14,12 @@ export class TaskIndex {
   private taskMap = new Map<string, Task[]>();
   private listeners: TaskIndexUpdateHandler[] = [];
 
-  constructor(private app: App) {}
+  constructor(
+    private app: App,
+    private rootFolder: string = "",
+    private includeTicklerFolder: boolean = true,
+    private includeRecurringFile: boolean = true
+  ) {}
 
   async loadAll(): Promise<void> {
     const files = this.app.vault.getMarkdownFiles().filter((file) => this.isIncludedPath(file.path));
@@ -64,10 +71,34 @@ export class TaskIndex {
   }
 
   private isIncludedPath(path: string): boolean {
-    return (
-      INCLUDED_PROJECT_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-      INCLUDED_FILE_NAMES.has(path)
-    );
+    const normalizedRoot = this.rootFolder.trim().replace(/^\/+|\/+$/g, "");
+    const rootPrefix = normalizedRoot ? `${normalizedRoot}/` : "";
+    if (normalizedRoot && !path.startsWith(rootPrefix)) {
+      return false;
+    }
+
+    const prefixedPath = normalizedRoot ? path.substring(rootPrefix.length) : path;
+
+    if (EXCLUDED_PROJECT_PREFIXES.some((prefix) => prefixedPath.startsWith(prefix))) {
+      return false;
+    }
+
+    if (prefixedPath.startsWith(ACTIVE_PROJECT_FOLDER) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
+      return true;
+    }
+
+    if (this.includeTicklerFolder && prefixedPath.startsWith(TICKLER_FOLDER)) {
+      return true;
+    }
+
+    if (INCLUDED_FILE_NAMES.has(prefixedPath)) {
+      if (prefixedPath === "recurring.md" && !this.includeRecurringFile) {
+        return false;
+      }
+      return true;
+    }
+
+    return false;
   }
 
   private isExcludedPath(path: string): boolean {

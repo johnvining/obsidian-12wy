@@ -7,7 +7,7 @@ Native Obsidian task views with bracket-token task grammar.
 1. `npm install`
 2. `npm run build`
 
-The output is copied into `.obsidian/plugins/12/` for local vault dev.
+The output is copied into `.obsidian/plugins/task-12/` for local vault dev.
 
 ## Usage
 

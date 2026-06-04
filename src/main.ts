@@ -1,19 +1,35 @@
-import { App, MarkdownPostProcessorContext, Notice, Plugin, TFile } from "obsidian";
+import { App, MarkdownPostProcessorContext, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 import { TaskIndex } from "./index";
-import { serializeTask } from "./parser";
+import { parseTaskLine, serializeTask } from "./parser";
 import type { Task } from "./types";
 
-const INCLUDED_PATH_PREFIXES = ["projects - active/", "12wy/"];
-const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md"]);
+interface TwelveSettings {
+  rootFolder: string;
+  includeTicklerFolder: boolean;
+  includeRecurringFile: boolean;
+}
+
+const DEFAULT_SETTINGS: TwelveSettings = {
+  rootFolder: "",
+  includeTicklerFolder: true,
+  includeRecurringFile: true,
+};
+
+const ACTIVE_PROJECT_FOLDER = "projects - active/";
+const TWELVE_WY_FOLDER = "12wy/";
+const TICKLER_FOLDER = "tickler/";
+const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
 
 export default class TwelvePlugin extends Plugin {
   private taskIndex!: TaskIndex;
+  private settings: TwelveSettings = DEFAULT_SETTINGS;
 
   async onload() {
     console.log("Loading 12 plugin");
-    this.taskIndex = new TaskIndex(this.app);
-
-    await this.taskIndex.loadAll();
+    await this.loadSettings();
+    this.addSettingTab(new TwelveSettingTab(this.app, this));
+    await this.initializeTaskIndex();
+    this.taskIndex.onUpdate(() => this.refreshPreview());
 
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
@@ -61,6 +77,27 @@ export default class TwelvePlugin extends Plugin {
 
   onunload() {
     console.log("Unloading 12 plugin");
+  }
+
+  private async initializeTaskIndex() {
+    this.taskIndex = new TaskIndex(
+      this.app,
+      this.settings.rootFolder,
+      this.settings.includeTicklerFolder,
+      this.settings.includeRecurringFile
+    );
+    await this.taskIndex.loadAll();
+  }
+
+  private async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  private async saveSettings() {
+    await this.saveData(this.settings);
+    await this.initializeTaskIndex();
+    this.taskIndex.onUpdate(() => this.refreshPreview());
+    this.refreshPreview();
   }
 
   private async processCodeBlock(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) {
@@ -268,9 +305,9 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private async render12WY(container: HTMLElement) {
-    const currentFile = this.app.vault.getAbstractFileByPath("12wy/current.md");
+    const currentFile = this.app.vault.getAbstractFileByPath(this.resolvePath("12wy/current.md"));
     if (!(currentFile instanceof TFile)) {
-      container.createEl("div", { text: "Unable to locate 12wy/current.md." });
+      container.createEl("div", { text: `Unable to locate ${this.resolvePath("12wy/current.md")}.` });
       return;
     }
 
@@ -290,7 +327,7 @@ export default class TwelvePlugin extends Plugin {
 
     const currentWeek = this.compute12WYWeek(startDate, today);
     const weekNumber = Math.min(Math.max(currentWeek, 1), 13);
-    const weekFilePath = `12wy/weeks/w${weekNumber.toString().padStart(2, "0")}.md`;
+    const weekFilePath = this.resolvePath(`12wy/weeks/w${weekNumber.toString().padStart(2, "0")}.md`);
     const weekFile = this.app.vault.getAbstractFileByPath(weekFilePath);
 
     const paceItems = await this.collect12WYPace(weekNumber);
@@ -425,8 +462,18 @@ export default class TwelvePlugin extends Plugin {
     if (includeActions) {
       const actionsEl = document.createElement("span");
       actionsEl.className = "twelve-task-actions";
-      actionsEl.appendChild(this.createActionButton("Remove TODAY", async () => await this.removeMarkerFromTask(task, "TODAY")));
-      actionsEl.appendChild(this.createActionButton("Tomorrow", async () => await this.deferTask(task, "tomorrow")));
+      actionsEl.appendChild(this.createActionButton("Remove TODAY", async () => {
+        const updatedTask = await this.removeMarkerFromTask(task, "TODAY");
+        if (updatedTask && !this.isVisibleToday(updatedTask, new Date())) {
+          row.remove();
+        }
+      }));
+      actionsEl.appendChild(this.createActionButton("Tomorrow", async () => {
+        const updatedTask = await this.deferTask(task, "tomorrow");
+        if (updatedTask && !this.isVisibleToday(updatedTask, new Date())) {
+          row.remove();
+        }
+      }));
       actionsEl.appendChild(this.createActionButton("Delete", async () => await this.deleteTask(task)));
       actionsEl.appendChild(this.createActionButton("Edit", async () => await this.editTaskText(task)));
       row.appendChild(actionsEl);
@@ -494,24 +541,26 @@ export default class TwelvePlugin extends Plugin {
     this.refreshPreview();
   }
 
-  private async removeMarkerFromTask(task: Task, marker: string) {
+  private async removeMarkerFromTask(task: Task, marker: string): Promise<Task | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) {
-      return;
+      return null;
     }
 
     const updatedTask: Task = { ...task, markers: task.markers.filter((value) => value !== marker) };
     await this.replaceTaskLine(file, task, serializeTask(updatedTask));
+    return updatedTask;
   }
 
-  private async deferTask(task: Task, dueValue: string) {
+  private async deferTask(task: Task, dueValue: string): Promise<Task | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) {
-      return;
+      return null;
     }
 
     const updatedTask: Task = { ...task, due: dueValue, markers: task.markers.filter((marker) => marker !== "TODAY") };
     await this.replaceTaskLine(file, task, serializeTask(updatedTask));
+    return updatedTask;
   }
 
   private async deleteTask(task: Task) {
@@ -564,10 +613,33 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private findLineIndex(lines: string[], task: Task): number {
-    if (lines[task.lineNumber] === task.lineText) {
-      return task.lineNumber;
+    if (task.lineNumber >= 0 && task.lineNumber < lines.length) {
+      if (lines[task.lineNumber] === task.lineText) {
+        return task.lineNumber;
+      }
     }
-    return lines.findIndex((line) => line === task.lineText);
+
+    const exactIndex = lines.findIndex((line) => line === task.lineText);
+    if (exactIndex !== -1) {
+      return exactIndex;
+    }
+
+    if (task.id) {
+      const idIndex = lines.findIndex((line, index) => {
+        const parsed = parseTaskLine(line, task.filePath, index, task.projectIs12WY);
+        return parsed?.id === task.id;
+      });
+      if (idIndex !== -1) {
+        return idIndex;
+      }
+    }
+
+    const normalizedTaskText = this.normalizeLine(task.lineText);
+    return lines.findIndex((line) => this.normalizeLine(line) === normalizedTaskText);
+  }
+
+  private normalizeLine(line: string): string {
+    return line.trim().replace(/\s+/g, " ");
   }
 
   private async writeLinesToFile(file: TFile, lines: string[]) {
@@ -849,24 +921,113 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private isIncludedPath(path: string): boolean {
-    return (
-      INCLUDED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-      INCLUDED_FILE_NAMES.has(path)
-    );
+    const normalizedRoot = this.getNormalizedRootFolder();
+    const rootPrefix = normalizedRoot ? `${normalizedRoot}/` : "";
+    if (normalizedRoot && !path.startsWith(rootPrefix)) {
+      return false;
+    }
+
+    const prefixedPath = normalizedRoot ? path.substring(rootPrefix.length) : path;
+
+    if (prefixedPath.startsWith("projects - archive/") || prefixedPath.startsWith("projects - new 12wy/")) {
+      return false;
+    }
+
+    if (prefixedPath.startsWith(ACTIVE_PROJECT_FOLDER) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
+      return true;
+    }
+
+    if (this.settings.includeTicklerFolder && prefixedPath.startsWith(TICKLER_FOLDER)) {
+      return true;
+    }
+
+    if (INCLUDED_FILE_NAMES.has(prefixedPath)) {
+      if (prefixedPath === "recurring.md" && !this.settings.includeRecurringFile) {
+        return false;
+      }
+      return true;
+    }
+
+    return false;
   }
 
   private isExcludedPath(path: string): boolean {
     return !this.isIncludedPath(path);
   }
 
+  private resolvePath(path: string): string {
+    const normalizedRoot = this.getNormalizedRootFolder();
+    return normalizedRoot ? `${normalizedRoot}/${path}` : path;
+  }
+
+  private getNormalizedRootFolder(): string {
+    return this.settings.rootFolder.trim().replace(/^\/+|\/+$/g, "");
+  }
+
   private refreshPreview() {
     const workspaceAny = this.app.workspace as any;
     if (typeof workspaceAny.requestMarkdownPreviewRefresh === "function") {
       workspaceAny.requestMarkdownPreviewRefresh();
-      return;
     }
     if (typeof this.app.workspace.trigger === "function") {
       this.app.workspace.trigger("markdown:refresh");
     }
+
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = (leaf as any).view;
+      if (view && typeof view.requestMarkdownPreviewRefresh === "function") {
+        view.requestMarkdownPreviewRefresh();
+      }
+    }
+  }
+}
+
+class TwelveSettingTab extends PluginSettingTab {
+  constructor(app: App, private plugin: TwelvePlugin) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    containerEl.createEl("h2", { text: "12 Plugin Settings" });
+
+    new Setting(containerEl)
+      .setName("Root folder")
+      .setDesc("Limit task discovery to a vault subfolder. Leave empty to use the vault root.")
+      .addText((text) =>
+        text
+          .setPlaceholder("projects - active")
+          .setValue(this.plugin.settings.rootFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.rootFolder = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Include tickler folder")
+      .setDesc("Include tasks inside a tickler folder when rendering views.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.includeTicklerFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.includeTicklerFolder = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Include recurring file")
+      .setDesc("Include the recurring file in task discovery and recurring task generation.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.includeRecurringFile)
+          .onChange(async (value) => {
+            this.plugin.settings.includeRecurringFile = value;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
