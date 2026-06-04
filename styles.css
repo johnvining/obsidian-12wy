@@ -12,6 +12,18 @@
   line-height: 1.35;
 }
 
+/* Suppress Obsidian's "editable code block" chrome on our views — the hover
+   outline (Live Preview box-shadow) and the floating edit button — so a view
+   reads as native UI, not a code block. Scoped via :has() to only our blocks. */
+.cm-embed-block:has(.twelve-view),
+.cm-embed-block:has(.twelve-view):hover {
+  box-shadow: none !important;
+}
+.cm-embed-block:has(.twelve-view) .edit-block-button,
+.block-language-12 .edit-block-button {
+  display: none !important;
+}
+
 /* Strip Obsidian's default markdown-table chrome from our custom tables; we
    re-add only the separators we want below. */
 .twelve-view table {
