@@ -78,6 +78,27 @@ canonical examples.
   group in the errands view.
 - **Travel/trips:** `**Status:** … [TRAVEL]`.
 
+All paths above are relative to the **GTD folder** (below).
+
+## The `gtd/` folder model
+
+Keep everything the plugin touches inside one folder (e.g. `gtd/`) and point the
+plugin at it via **Settings → GTD folder** (a folder picker). Conventional paths
+then resolve relative to it — `gtd/12wy/…`, `gtd/projects - active/…`,
+`gtd/errands.md`, `gtd/views/…` — so your GTD workspace is self-contained and
+droppable into any vault.
+
+`sample-vault/gtd/` is a ready-made example, including a `gtd/CLAUDE.md` that
+defines an **editing boundary for Claude**: an agent may edit anything inside
+`gtd/` but nothing elsewhere in the vault. Run Claude Code from inside the folder
+(`cd <vault>/gtd && claude`) so that boundary is the default; the accompanying
+`gtd/.claude/settings.json` reinforces it.
+
+## Settings
+
+- **GTD folder** — folder holding your 12WY data + view notes (empty = whole vault).
+- **Include tickler folder** / **Include recurring file** — toggle those sources.
+
 ## Known assumptions to confirm
 
 Because the grammar is inferred, the most likely things to differ from your real

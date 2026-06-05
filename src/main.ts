@@ -1,4 +1,5 @@
 import {
+  AbstractInputSuggest,
   App,
   MarkdownPostProcessorContext,
   Modal,
@@ -7,6 +8,7 @@ import {
   PluginSettingTab,
   Setting,
   TFile,
+  TFolder,
   debounce,
   setIcon,
 } from "obsidian";
@@ -1350,17 +1352,26 @@ class TwelveSettingTab extends PluginSettingTab {
     const saveRootFolder = debounce(() => this.plugin.saveSettings(), 500, true);
 
     new Setting(containerEl)
-      .setName("Root folder")
-      .setDesc("Limit task discovery to a vault subfolder. Leave empty to use the vault root.")
-      .addText((text) =>
+      .setName("GTD folder")
+      .setDesc(
+        'Folder holding your 12WY data and view notes (e.g. "gtd"). Start typing to pick a folder. Leave empty to use the whole vault.'
+      )
+      .addText((text) => {
         text
-          .setPlaceholder("projects - active")
+          .setPlaceholder("gtd")
           .setValue(this.plugin.settings.rootFolder)
           .onChange((value) => {
             this.plugin.settings.rootFolder = value;
             saveRootFolder();
-          })
-      );
+          });
+        const suggest = new FolderSuggest(this.app, text.inputEl);
+        suggest.onSelect((folder) => {
+          text.setValue(folder.path);
+          this.plugin.settings.rootFolder = folder.path;
+          saveRootFolder();
+          suggest.close();
+        });
+      });
 
     new Setting(containerEl)
       .setName("Include tickler folder")
@@ -1491,5 +1502,25 @@ class ConfirmModal extends Modal {
       this.settled = true;
       this.onResult(false);
     }
+  }
+}
+
+// Folder-name autocomplete for the GTD-folder setting.
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  constructor(private appRef: App, inputEl: HTMLInputElement) {
+    super(appRef, inputEl);
+  }
+
+  protected getSuggestions(query: string): TFolder[] {
+    const q = query.toLowerCase();
+    return this.appRef.vault
+      .getAllLoadedFiles()
+      .filter((file): file is TFolder => file instanceof TFolder)
+      .filter((folder) => folder.path.toLowerCase().includes(q))
+      .slice(0, 50);
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path === "/" ? "/ (vault root)" : folder.path);
   }
 }
