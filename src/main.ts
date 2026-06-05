@@ -2,6 +2,7 @@ import {
   AbstractInputSuggest,
   App,
   MarkdownPostProcessorContext,
+  MarkdownRenderChild,
   Modal,
   Notice,
   Plugin,
@@ -13,6 +14,7 @@ import {
   setIcon,
 } from "obsidian";
 import { TaskIndex } from "./index";
+import type { FileSnapshot } from "./index";
 import { parseTaskLine, serializeTask } from "./parser";
 import type { Task } from "./types";
 
@@ -54,9 +56,12 @@ export default class TwelvePlugin extends Plugin {
   private taskIndex!: TaskIndex;
   settings: TwelveSettings = DEFAULT_SETTINGS;
 
+  // Currently-rendered `12` code blocks, re-run on data change.
+  private activeViews = new Set<ViewEntry>();
+
   // Coalesce bursts of update events (e.g. while typing) into a single preview
   // refresh so we don't re-render every code block on every keystroke.
-  private refreshPreview = debounce(() => this.refreshPreviewNow(), 150, false);
+  private refreshPreview = debounce(() => this.refreshPreviewNow(), 120, false);
 
   async onload() {
     console.log("Loading 12 plugin");
@@ -101,6 +106,12 @@ export default class TwelvePlugin extends Plugin {
     );
 
     this.registerMarkdownCodeBlockProcessor("12", async (source, el, ctx) => {
+      // Track this block so we can re-render it when data changes — a write to a
+      // project/week file won't re-render the (different) note holding the view,
+      // so we re-run the processor ourselves.
+      const entry: ViewEntry = { source, el, ctx };
+      this.activeViews.add(entry);
+      ctx.addChild(new RemovalChild(el, () => this.activeViews.delete(entry)));
       await this.processCodeBlock(source, el, ctx);
     });
   }
@@ -638,6 +649,7 @@ export default class TwelvePlugin extends Plugin {
     const tasks = this.taskIndex
       .getTasks()
       .filter((task) => task.due && task.status !== "done" && task.status !== "cancelled")
+      .filter((task) => !task.markers.includes("LATER"))
       .filter(
         (task) =>
           !this.isExcludedPath(task.filePath) &&
@@ -832,6 +844,8 @@ export default class TwelvePlugin extends Plugin {
   // ---------------------------------------------------------------------------
 
   private viewNoteMap: Map<string, string> | null = null;
+  // Project paths expanded in the Projects triage view (kept across re-renders).
+  private expandedProjects = new Set<string>();
 
   private async openView(view: string) {
     const file = await this.findViewNote(view);
@@ -966,7 +980,6 @@ export default class TwelvePlugin extends Plugin {
   // ---------------------------------------------------------------------------
 
   private async renderProjects(container: HTMLElement) {
-    const isOpen = (task: Task) => task.status !== "done" && task.status !== "cancelled";
     const projects = this.taskIndex.getSnapshots().filter((s) => this.projectTier(s.filePath) !== null);
 
     if (!projects.length) {
@@ -979,25 +992,20 @@ export default class TwelvePlugin extends Plugin {
         .filter((s) => this.projectTier(s.filePath) === tier)
         .sort((a, b) => this.projectTitle(a.filePath).localeCompare(this.projectTitle(b.filePath)));
 
-    // This Year + KTLO show their open tasks; Next Year is parked (name only,
-    // no surfaced tasks) so you can still see what you deliberately deferred.
+    // This Year + KTLO: a compact, collapsed list of projects. Click a project
+    // to expand its tasks with a Today / — / Later triage control on each.
     for (const tier of ["committed", "ktlo"] as ProjectTier[]) {
-      const items = tierProjects(tier)
-        .map((s) => ({ snapshot: s, tasks: s.tasks.filter(isOpen) }))
-        .filter((p) => p.tasks.length > 0);
+      const items = tierProjects(tier).filter((s) => s.tasks.some((t) => this.isOpen(t)));
       if (!items.length) {
         continue;
       }
       const body = this.section(container, TIER_LABELS[tier], items.length);
-      for (const { snapshot, tasks } of items) {
-        const block = body.createDiv({ cls: "twelve-project" });
-        const head = block.createDiv({ cls: "twelve-project-head" });
-        this.projectPill(head, this.projectTitle(snapshot.filePath), snapshot.filePath, "twelve-project-name");
-        head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${tasks.length} open` });
-        this.renderTaskTable(block, this.sortTasks(tasks), { showProject: false });
+      for (const snapshot of items) {
+        this.renderProjectRow(body, snapshot);
       }
     }
 
+    // Next Year is parked — name only, no tasks.
     const parked = tierProjects("next");
     if (parked.length) {
       const body = this.section(container, TIER_LABELS.next, parked.length);
@@ -1006,6 +1014,87 @@ export default class TwelvePlugin extends Plugin {
         const row = list.createDiv({ cls: "twelve-row" });
         this.projectPill(row.createDiv({ cls: "twelve-row-text" }), this.projectTitle(snapshot.filePath), snapshot.filePath);
       }
+    }
+  }
+
+  private isOpen(task: Task): boolean {
+    return task.status !== "done" && task.status !== "cancelled";
+  }
+
+  // One project in the triage list: a clickable header (title + Today/Later/open
+  // counts) that expands to show its tasks with a 3-way schedule control.
+  private renderProjectRow(body: HTMLElement, snapshot: FileSnapshot) {
+    const path = snapshot.filePath;
+    const tasks = this.sortTasks(snapshot.tasks.filter((t) => this.isOpen(t)));
+    const today = tasks.filter((t) => this.taskSchedule(t) === "today").length;
+    const later = tasks.filter((t) => this.taskSchedule(t) === "later").length;
+
+    const block = body.createDiv({ cls: "twelve-project" });
+    const head = block.createDiv({ cls: "twelve-project-head twelve-project-toggle" });
+    const caret = head.createSpan({ cls: "twelve-caret" });
+    head.createSpan({ cls: "twelve-project-name", text: this.projectTitle(path) });
+
+    const counts = head.createSpan({ cls: "twelve-project-counts" });
+    if (today) {
+      counts.createSpan({ cls: "twelve-count-today", text: `${today} today` });
+    }
+    if (later) {
+      counts.createSpan({ cls: "twelve-count-later", text: `${later} later` });
+    }
+    counts.createSpan({ cls: "twelve-faint", text: `${tasks.length} open` });
+
+    // Build the task list once; show/hide it on click via the DOM (no full
+    // re-render needed, since expanding changes no file).
+    const list = block.createDiv({ cls: "twelve-project-tasks" });
+    for (const task of tasks) {
+      const row = list.createDiv({ cls: "twelve-triage-row" });
+      this.renderScheduleControl(row, task);
+      const text = row.createSpan({ cls: "twelve-triage-text", text: task.text });
+      text.setAttr("title", "Double-click to edit");
+      text.addEventListener("dblclick", () => this.editTaskText(task));
+    }
+
+    const applyExpanded = (expanded: boolean) => {
+      list.style.display = expanded ? "" : "none";
+      setIcon(caret, expanded ? "chevron-down" : "chevron-right");
+    };
+    applyExpanded(this.expandedProjects.has(path));
+
+    head.addEventListener("click", () => {
+      const next = !this.expandedProjects.has(path);
+      if (next) {
+        this.expandedProjects.add(path);
+      } else {
+        this.expandedProjects.delete(path);
+      }
+      applyExpanded(next);
+    });
+  }
+
+  // A 3-way segmented control: Later · — · Today.
+  private renderScheduleControl(parent: HTMLElement, task: Task) {
+    const current = this.taskSchedule(task);
+    const control = parent.createDiv({ cls: "twelve-segment" });
+    const options: Array<{ state: "later" | "none" | "today"; label: string }> = [
+      { state: "later", label: "Later" },
+      { state: "none", label: "—" },
+      { state: "today", label: "Today" },
+    ];
+    for (const opt of options) {
+      const btn = control.createEl("button", {
+        cls: `twelve-segment-btn twelve-segment-${opt.state}`,
+        text: opt.label,
+      });
+      if (current === opt.state) {
+        btn.addClass("is-active");
+      }
+      btn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (current !== opt.state) {
+          await this.setTaskSchedule(task, opt.state);
+        }
+      });
     }
   }
 
@@ -1119,6 +1208,32 @@ export default class TwelvePlugin extends Plugin {
     return updatedTask;
   }
 
+  // Set a task's schedule bucket: "today", "later", or "none". TODAY and LATER
+  // are mutually exclusive.
+  private async setTaskSchedule(task: Task, state: "today" | "later" | "none"): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(task.filePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+    const markers = task.markers.filter((m) => m !== "TODAY" && m !== "LATER");
+    if (state === "today") {
+      markers.push("TODAY");
+    } else if (state === "later") {
+      markers.push("LATER");
+    }
+    await this.replaceTaskLine(file, { ...task }, serializeTask({ ...task, markers }));
+  }
+
+  private taskSchedule(task: Task): "today" | "later" | "none" {
+    if (task.markers.includes("TODAY")) {
+      return "today";
+    }
+    if (task.markers.includes("LATER")) {
+      return "later";
+    }
+    return "none";
+  }
+
   private async deferTask(task: Task, dueValue: string): Promise<Task | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) {
@@ -1205,29 +1320,56 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private findLineIndex(lines: string[], task: Task): number {
+    const parseAt = (index: number): Task | undefined =>
+      parseTaskLine(lines[index], task.filePath, index, task.projectIs12WY);
+
+    // 1. Exact raw line at the recorded index.
+    if (task.lineNumber >= 0 && task.lineNumber < lines.length && lines[task.lineNumber] === task.lineText) {
+      return task.lineNumber;
+    }
+
+    // 2. Same task content at the recorded index. This survives a line being
+    //    re-serialized (e.g. its markers changed) since this task was captured,
+    //    which is the common case when triaging quickly.
     if (task.lineNumber >= 0 && task.lineNumber < lines.length) {
-      if (lines[task.lineNumber] === task.lineText) {
+      const atLine = parseAt(task.lineNumber);
+      if (atLine && this.sameTask(atLine, task)) {
         return task.lineNumber;
       }
     }
 
+    // 3. Exact raw line anywhere.
     const exactIndex = lines.findIndex((line) => line === task.lineText);
     if (exactIndex !== -1) {
       return exactIndex;
     }
 
+    // 4. Stable id, if present.
     if (task.id) {
-      const idIndex = lines.findIndex((line, index) => {
-        const parsed = parseTaskLine(line, task.filePath, index, task.projectIs12WY);
-        return parsed?.id === task.id;
-      });
+      const idIndex = lines.findIndex((_, index) => parseAt(index)?.id === task.id);
       if (idIndex !== -1) {
         return idIndex;
       }
     }
 
+    // 5. Same task content anywhere (marker/token-agnostic).
+    const contentIndex = lines.findIndex((_, index) => {
+      const parsed = parseAt(index);
+      return parsed ? this.sameTask(parsed, task) : false;
+    });
+    if (contentIndex !== -1) {
+      return contentIndex;
+    }
+
+    // 6. Last resort: whitespace-normalized raw line.
     const normalizedTaskText = this.normalizeLine(task.lineText);
     return lines.findIndex((line) => this.normalizeLine(line) === normalizedTaskText);
+  }
+
+  // Two task lines are "the same" if their body text, indent, and bullet match —
+  // independent of status, markers, dates, and other trailing tokens.
+  private sameTask(a: Task, b: Task): boolean {
+    return a.text === b.text && a.indent === b.indent && a.bullet === b.bullet;
   }
 
   private normalizeLine(line: string): string {
@@ -1434,6 +1576,11 @@ export default class TwelvePlugin extends Plugin {
       return false;
     }
 
+    // [LATER] is an explicit "not now" — never surfaces, even if dated/[TODAY].
+    if (task.markers.some((marker) => marker.toUpperCase() === "LATER")) {
+      return false;
+    }
+
     if (task.start && !this.isDateOnOrBefore(task.start, today)) {
       return false;
     }
@@ -1567,20 +1714,31 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private refreshPreviewNow() {
-    const workspaceAny = this.app.workspace as any;
-    if (typeof workspaceAny.requestMarkdownPreviewRefresh === "function") {
-      workspaceAny.requestMarkdownPreviewRefresh();
-    }
-    if (typeof this.app.workspace.trigger === "function") {
-      this.app.workspace.trigger("markdown:refresh");
-    }
-
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      const view = (leaf as any).view;
-      if (view && typeof view.requestMarkdownPreviewRefresh === "function") {
-        view.requestMarkdownPreviewRefresh();
+    // Re-run every live `12` block against the current index. This is what makes
+    // a write to one file update views living in other notes.
+    for (const entry of [...this.activeViews]) {
+      if (!entry.el.isConnected) {
+        this.activeViews.delete(entry);
+        continue;
       }
+      void this.processCodeBlock(entry.source, entry.el, entry.ctx);
     }
+  }
+}
+
+interface ViewEntry {
+  source: string;
+  el: HTMLElement;
+  ctx: MarkdownPostProcessorContext;
+}
+
+// Removes its view entry from the registry when the code block is torn down.
+class RemovalChild extends MarkdownRenderChild {
+  constructor(containerEl: HTMLElement, private onRemove: () => void) {
+    super(containerEl);
+  }
+  onunload(): void {
+    this.onRemove();
   }
 }
 

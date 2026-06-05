@@ -430,17 +430,100 @@ a.twelve-pill.twelve-link:hover {
   background: var(--color-red, #b4513f);
 }
 
-/* ---- Projects ---------------------------------------------------------- */
+/* ---- Projects (triage list) -------------------------------------------- */
 .twelve-project {
-  margin-bottom: 0.9rem;
+  border-bottom: 1px solid var(--twelve-line);
+}
+.twelve-project:last-child {
+  border-bottom: none;
 }
 .twelve-project-head {
   display: flex;
-  align-items: baseline;
-  margin-bottom: 0.1rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.3rem;
+}
+.twelve-project-toggle {
+  cursor: pointer;
+}
+.twelve-project-toggle:hover {
+  background: var(--background-modifier-hover);
+}
+.twelve-caret {
+  display: inline-flex;
+  color: var(--twelve-faint);
+}
+.twelve-caret .svg-icon {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 .twelve-project-name {
-  font-weight: 700;
+  font-weight: 600;
+}
+.twelve-project-counts {
+  margin-left: auto;
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+.twelve-count-today {
+  color: var(--twelve-green);
+  font-weight: 600;
+}
+.twelve-count-later {
+  color: var(--text-muted);
+}
+
+/* Expanded project task list with per-task triage */
+.twelve-project-tasks {
+  padding: 0 0.3rem 0.5rem 1.6rem;
+}
+.twelve-triage-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+}
+.twelve-triage-text {
+  flex: 1;
+}
+
+/* 3-way segmented control: Later · — · Today */
+.twelve-segment {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--twelve-line);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+.twelve-segment-btn {
+  border: none;
+  border-right: 1px solid var(--twelve-line);
+  background: transparent;
+  box-shadow: none;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.twelve-segment-btn:last-child {
+  border-right: none;
+}
+.twelve-segment-btn:hover {
+  background: var(--background-modifier-hover);
+}
+.twelve-segment-today.is-active {
+  background: var(--twelve-green);
+  color: var(--text-on-accent, #fff);
+}
+.twelve-segment-later.is-active {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+.twelve-segment-none.is-active {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
 }
 
 /* ---- Modals ------------------------------------------------------------ */

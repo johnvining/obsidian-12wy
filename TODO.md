@@ -1,5 +1,24 @@
 # 12 plugin — TODO / open questions
 
+## 🔴 Bugs
+- **Editing task names — likely fixed, verify.** Root cause was `findLineIndex`
+  matching the exact raw line, which broke once markers/text changed or the task
+  object went stale. Hardened to match by task *content* (text+indent+bullet).
+  Confirm double-click rename + segment triage both work, then close this.
+
+## ✅ Done
+- **`[LATER]` triage.** `[LATER]` is now a marker (mutually exclusive with
+  `[TODAY]`, never surfaces in Today/Forecast). The Projects view has a per-task
+  3-way control (Later · — · Today) for fast triage.
+- **Projects view = projects only.** Projects now show as a collapsed list
+  (name + today/later/open counts); click a project to expand its tasks with the
+  triage control.
+
+## 🟠 Features wanted
+- **Editor hotkeys for triage** (deferred — chose project-view-only for now): if
+  in-file keyboard triage is wanted later, add "toggle Today" / "toggle Later"
+  commands operating on the cursor's task line.
+
 ## 🟡 Design decisions needed
 
 ### Ticklers — figure out how they're supposed to work

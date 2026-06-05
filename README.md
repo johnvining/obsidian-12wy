@@ -46,7 +46,7 @@ A task is a normal Markdown checkbox with optional trailing `[bracket]` tokens:
 ```
 
 - **Status:** `[ ]` todo, `[x]` done, `[/]` in-progress, `[-]` cancelled.
-- **Markers:** `[TODAY]`, `[WAITING]`, `[ERRANDS]`, `[URGENT]`, `[SOON]`, `[TRAVEL]`.
+- **Markers:** `[TODAY]`, `[LATER]`, `[WAITING]`, `[ERRANDS]`, `[URGENT]`, `[SOON]`, `[TRAVEL]`. `[TODAY]`/`[LATER]` are the surface/defer states (mutually exclusive); triage them in the Projects view.
 - **Dates:** `[due:YYYY-MM-DD]`, `[start:YYYY-MM-DD]`, `[done:YYYY-MM-DD]`.
 - **Recurrence:** `[every:1 week]` (`day(s)`/`week(s)`/`month(s)`). Completing a
   recurring task spawns the next occurrence with an advanced due date.

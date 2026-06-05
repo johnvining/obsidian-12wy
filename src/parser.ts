@@ -2,7 +2,7 @@ import { Task, TaskStatus, Priority } from "./types";
 
 const TASK_LINE_RE = /^(\s*)([-*])\s*\[([ x\/-])\]\s*(.*)$/i;
 const BRACKET_TOKEN_RE = /\[([^\]]+)\]$/;
-const KNOWN_MARKERS = new Set(["TODAY", "ERRANDS", "WAITING", "URGENT", "SOON", "TRAVEL"]);
+const KNOWN_MARKERS = new Set(["TODAY", "LATER", "ERRANDS", "WAITING", "URGENT", "SOON", "TRAVEL"]);
 const PRIORITY_RE = /^p:(high|med|low)$/i;
 
 export function parseTaskLine(line: string, filePath: string, lineNumber: number, projectIs12WY: boolean): Task | undefined {
@@ -132,7 +132,7 @@ export function serializeTask(task: Task): string {
   const base = `${task.indent}${task.bullet} [${statusMark}] ${task.text}`.trimEnd();
   const tokens: string[] = [];
 
-  const canonicalMarkers = ["TODAY", "ERRANDS", "WAITING", "URGENT", "SOON", "TRAVEL"];
+  const canonicalMarkers = ["TODAY", "LATER", "ERRANDS", "WAITING", "URGENT", "SOON", "TRAVEL"];
   for (const marker of canonicalMarkers) {
     if (task.markers.includes(marker)) {
       tokens.push(`[${marker}]`);
