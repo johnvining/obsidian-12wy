@@ -603,8 +603,24 @@ export default class TwelvePlugin extends Plugin {
       const checkCell = tr.createEl("td", { cls: "twelve-cell-check" });
       this.checkbox(checkCell, task.status === "done", () => this.toggleTaskDone(task));
 
+      // When a table shows a project column, a task may name its project inline
+      // via a leading [[wikilink]] — recurring/forecast tasks live in one file
+      // and point at their real project this way. Pull it out so the text reads
+      // cleanly and the pill links to the actual project, not the host file.
+      let displayText = task.text;
+      let projectLabel = this.projectTitle(task.filePath);
+      let projectPath: string | null = task.filePath;
+      if (opts.showProject) {
+        const parsed = this.parseCommitmentLabel(task.text, task.filePath);
+        if (parsed.label) {
+          displayText = parsed.rest;
+          projectLabel = parsed.label;
+          projectPath = parsed.path;
+        }
+      }
+
       const textCell = tr.createEl("td", { cls: "twelve-cell-text" });
-      textCell.createSpan({ text: task.text });
+      textCell.createSpan({ text: displayText });
       for (const marker of task.markers) {
         if (marker === "TODAY") {
           continue;
@@ -624,7 +640,7 @@ export default class TwelvePlugin extends Plugin {
       }
       if (opts.showProject) {
         const projectCell = tr.createEl("td", { cls: "twelve-cell-project" });
-        this.projectPill(projectCell, this.projectTitle(task.filePath), task.filePath);
+        this.projectPill(projectCell, projectLabel, projectPath);
       }
       if (opts.actions) {
         const actions = tr.createEl("td", { cls: "twelve-cell-actions" }).createDiv({ cls: "twelve-actions" });
