@@ -1,7 +1,10 @@
 import { Task, TaskStatus, Priority } from "./types";
 
 const TASK_LINE_RE = /^(\s*)([-*])\s*\[([ x\/-])\]\s*(.*)$/i;
-const BRACKET_TOKEN_RE = /\[([^\]]+)\]$/;
+// Match any `[token]` anywhere on the line. The inner class excludes both
+// brackets so it can never span a `[[wikilink]]`; the loop also guards against
+// a wikilink's inner `[Note]` slice (see parseTaskLine).
+const BRACKET_TOKEN_RE = /\[([^\[\]]+)\]/g;
 const KNOWN_MARKERS = new Set(["TODAY", "LATER", "ERRANDS", "WAITING", "URGENT", "SOON", "TRAVEL"]);
 const PRIORITY_RE = /^p:(high|med|low)$/i;
 
@@ -15,21 +18,28 @@ export function parseTaskLine(line: string, filePath: string, lineNumber: number
   let text = rest.trim();
   const tokens: string[] = [];
 
-  while (true) {
-    const tokenMatch = BRACKET_TOKEN_RE.exec(text);
-    if (!tokenMatch) {
-      break;
+  // Pull every `[token]` out of the line regardless of position, stitching the
+  // gaps back together so prose and `[[wikilinks]]` between tokens survive as
+  // display text. Tokens no longer have to sit at the end of the line.
+  let display = "";
+  let cursor = 0;
+  let tokenMatch: RegExpExecArray | null;
+  BRACKET_TOKEN_RE.lastIndex = 0;
+  while ((tokenMatch = BRACKET_TOKEN_RE.exec(text)) !== null) {
+    // Skip an Obsidian wikilink's inner `[Note]` slice — its neighbouring char
+    // is the other bracket of `[[...]]`. Leaving it in `display` keeps the link
+    // intact on write-back.
+    const before = text[tokenMatch.index - 1];
+    const after = text[tokenMatch.index + tokenMatch[0].length];
+    if (before === "[" || after === "]") {
+      continue;
     }
-    // Don't consume Obsidian wikilinks (`[[Note]]`) that happen to sit at the
-    // end of the line — the trailing `]]` would otherwise be parsed as a token
-    // and corrupt the link on write-back.
-    if (tokenMatch.index > 0 && text[tokenMatch.index - 1] === "[") {
-      break;
-    }
-    const token = tokenMatch[0].trim();
-    tokens.unshift(token);
-    text = text.slice(0, tokenMatch.index).trim();
+    display += text.slice(cursor, tokenMatch.index);
+    cursor = tokenMatch.index + tokenMatch[0].length;
+    tokens.push(tokenMatch[0].trim());
   }
+  display += text.slice(cursor);
+  text = display.replace(/\s+/g, " ").trim();
 
   const markers: string[] = [];
   const extraTokens: string[] = [];
