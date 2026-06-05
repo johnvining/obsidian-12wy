@@ -535,8 +535,8 @@ a.twelve-pill.twelve-link:hover {
   background: var(--background-modifier-hover);
 }
 .twelve-today-toggle.is-active {
-  background: var(--twelve-green);
-  border-color: var(--twelve-green);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
   color: var(--text-on-accent, #fff);
 }
 
