@@ -519,17 +519,11 @@ a.twelve-pill.twelve-link:hover {
   opacity: 0.85;
 }
 
-/* 3-way segmented control: Later · — · Today */
-.twelve-segment {
-  display: inline-flex;
+/* Today toggle (left of the task text) */
+.twelve-today-toggle {
   flex: 0 0 auto;
   border: 1px solid var(--twelve-line);
   border-radius: 0.4rem;
-  overflow: hidden;
-}
-.twelve-segment-btn {
-  border: none;
-  border-right: 1px solid var(--twelve-line);
   background: transparent;
   box-shadow: none;
   padding: 0.1rem 0.5rem;
@@ -537,21 +531,36 @@ a.twelve-pill.twelve-link:hover {
   color: var(--text-muted);
   cursor: pointer;
 }
-.twelve-segment-btn:last-child {
-  border-right: none;
-}
-.twelve-segment-btn:hover {
+.twelve-today-toggle:hover {
   background: var(--background-modifier-hover);
 }
-.twelve-segment-today.is-active {
+.twelve-today-toggle.is-active {
   background: var(--twelve-green);
+  border-color: var(--twelve-green);
   color: var(--text-on-accent, #fff);
 }
-.twelve-segment-later.is-active {
-  background: var(--background-modifier-border);
-  color: var(--text-normal);
+
+/* Later toggle + Delete, on the right of the task text */
+.twelve-triage-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
-.twelve-segment-none.is-active {
+.twelve-later-toggle {
+  border: 1px solid var(--twelve-line);
+  border-radius: 0.4rem;
+  background: transparent;
+  box-shadow: none;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.twelve-later-toggle:hover {
+  background: var(--background-modifier-hover);
+}
+.twelve-later-toggle.is-active {
   background: var(--background-modifier-border);
   color: var(--text-normal);
 }

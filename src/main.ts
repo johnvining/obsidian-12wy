@@ -1119,11 +1119,12 @@ export default class TwelvePlugin extends Plugin {
     });
   }
 
-  // A task row in the triage view: schedule control + text + a tickler date chip
-  // (so a scheduled task is visible, never silently triaged away).
+  // A task row in the triage view: a Today toggle + text + a tickler date chip
+  // (so a scheduled task is visible, never silently triaged away), with Later and
+  // Delete actions tucked to the right of the text.
   private renderTriageRow(list: HTMLElement, task: Task) {
     const row = list.createDiv({ cls: "twelve-triage-row" });
-    this.renderScheduleControl(row, task);
+    this.renderTodayToggle(row, task);
     const text = row.createSpan({ cls: "twelve-triage-text", text: task.text });
     text.setAttr("title", "Double-click to edit");
     text.addEventListener("dblclick", () => this.editTaskText(task));
@@ -1134,33 +1135,43 @@ export default class TwelvePlugin extends Plugin {
         chip.setAttr("title", `Tickler: ${task.start}`);
       }
     }
+    this.renderTriageActions(row, task);
   }
 
-  // A 3-way segmented control: Later · — · Today.
-  private renderScheduleControl(parent: HTMLElement, task: Task) {
+  // A single Today toggle: on => scheduled for today, off => unscheduled ("none").
+  private renderTodayToggle(parent: HTMLElement, task: Task) {
     const current = this.taskSchedule(task);
-    const control = parent.createDiv({ cls: "twelve-segment" });
-    const options: Array<{ state: "later" | "none" | "today"; label: string }> = [
-      { state: "later", label: "Later" },
-      { state: "none", label: "—" },
-      { state: "today", label: "Today" },
-    ];
-    for (const opt of options) {
-      const btn = control.createEl("button", {
-        cls: `twelve-segment-btn twelve-segment-${opt.state}`,
-        text: opt.label,
-      });
-      if (current === opt.state) {
-        btn.addClass("is-active");
-      }
-      btn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (current !== opt.state) {
-          await this.setTaskSchedule(task, opt.state);
-        }
-      });
+    const active = current === "today";
+    const btn = parent.createEl("button", { cls: "twelve-today-toggle", text: "Today" });
+    if (active) {
+      btn.addClass("is-active");
     }
+    btn.setAttr("aria-pressed", active ? "true" : "false");
+    btn.setAttr("title", active ? "Remove from today" : "Add to today");
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await this.setTaskSchedule(task, active ? "none" : "today");
+    });
+  }
+
+  // Later (toggle) and Delete, sitting on the right of the task text.
+  private renderTriageActions(parent: HTMLElement, task: Task) {
+    const current = this.taskSchedule(task);
+    const actions = parent.createDiv({ cls: "twelve-triage-actions" });
+    const active = current === "later";
+    const later = actions.createEl("button", { cls: "twelve-later-toggle", text: "Later" });
+    if (active) {
+      later.addClass("is-active");
+    }
+    later.setAttr("aria-pressed", active ? "true" : "false");
+    later.setAttr("title", active ? "Unschedule" : "Defer to someday");
+    later.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await this.setTaskSchedule(task, active ? "none" : "later");
+    });
+    this.iconButton(actions, "x", "Delete", () => this.deleteTask(task));
   }
 
   private getRecurringTasks(): Task[] {
