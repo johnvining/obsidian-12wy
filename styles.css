@@ -1,11 +1,22 @@
 /* =========================================================================
    12 plugin — refined cream / serif / green design language.
    Dense, low-chrome views. Colors lean on Obsidian theme variables so the
-   views adapt to the active theme, with a green accent for section chrome.
+   views adapt to the active theme, leaning on the theme's interactive accent
+   (with a hue-shifted sibling tone for section headers).
    ========================================================================= */
 
 .twelve-view {
-  --twelve-green: var(--color-green, #5b8a52);
+  /* Primary accent: the theme's own interactive accent — used for the Today
+     toggle, count badges, checkboxes and other "active" highlights. */
+  --twelve-accent: var(--interactive-accent);
+  /* Header accent: derived from the same interactive accent (via its HSL
+     components) but hue-rotated and deepened so it's a related sibling color,
+     visibly distinct from the accent used to fill the Today toggle. */
+  --twelve-header: hsl(
+    calc(var(--accent-h, 145) + 40),
+    calc(var(--accent-s, 45%) * 0.85),
+    calc(var(--accent-l, 45%) * 0.88)
+  );
   --twelve-line: var(--background-modifier-border);
   --twelve-faint: var(--text-faint);
   font-size: 0.875rem;
@@ -54,7 +65,7 @@
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
-  color: var(--twelve-green);
+  color: var(--twelve-header);
 }
 
 /* ---- Badges & pills ---------------------------------------------------- */
@@ -63,7 +74,7 @@
   min-width: 1.3rem;
   padding: 0.02rem 0.45rem;
   border-radius: 999px;
-  background: var(--twelve-green);
+  background: var(--twelve-accent);
   color: var(--text-on-accent, #fff);
   font-size: 0.68rem;
   font-weight: 600;
@@ -130,7 +141,7 @@ a.twelve-pill.twelve-link:hover {
 .twelve-check {
   width: 0.95rem;
   height: 0.95rem;
-  accent-color: var(--twelve-green);
+  accent-color: var(--twelve-accent);
   cursor: pointer;
   flex: 0 0 auto;
   margin: 0;
@@ -229,7 +240,7 @@ a.twelve-pill.twelve-link:hover {
   color: var(--color-red, #b4513f);
 }
 .twelve-due-today {
-  color: var(--twelve-green);
+  color: var(--twelve-accent);
   font-weight: 600;
 }
 .twelve-due-soon {
@@ -334,7 +345,7 @@ a.twelve-pill.twelve-link:hover {
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .twelve-card:hover {
-  border-color: var(--twelve-green);
+  border-color: var(--twelve-accent);
   background: var(--background-modifier-hover);
 }
 .twelve-card-title {
@@ -372,7 +383,7 @@ a.twelve-pill.twelve-link:hover {
   color: var(--text-muted);
 }
 .twelve-week-slice.is-complete {
-  color: var(--twelve-green);
+  color: var(--twelve-accent);
   font-weight: 600;
 }
 .twelve-view table.twelve-wy-table td {
@@ -469,7 +480,7 @@ a.twelve-pill.twelve-link:hover {
   font-variant-numeric: tabular-nums;
 }
 .twelve-count-today {
-  color: var(--twelve-green);
+  color: var(--twelve-accent);
   font-weight: 600;
 }
 .twelve-count-later {
@@ -535,8 +546,8 @@ a.twelve-pill.twelve-link:hover {
   background: var(--background-modifier-hover);
 }
 .twelve-today-toggle.is-active {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
+  background: var(--twelve-accent);
+  border-color: var(--twelve-accent);
   color: var(--text-on-accent, #fff);
 }
 
