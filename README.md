@@ -100,11 +100,16 @@ then resolve relative to it — `gtd/12wy/…`, `gtd/projects - active/…`,
 `gtd/errands.md`, `gtd/views/…` — so your GTD workspace is self-contained and
 droppable into any vault.
 
-`sample-vault/gtd/` is a ready-made example, including a `gtd/CLAUDE.md` that
-defines an **editing boundary for Claude**: an agent may edit anything inside
-`gtd/` but nothing elsewhere in the vault. Run Claude Code from inside the folder
-(`cd <vault>/gtd && claude`) so that boundary is the default; the accompanying
-`gtd/.claude/settings.json` reinforces it.
+**`gtd-template/`** (tracked in this repo) is the canonical starter: copy it into
+your vault as `gtd/`, then point the plugin's **GTD folder** setting at it. It
+contains the tier folders, view notes, skeleton files, and — importantly — a
+**`CLAUDE.md`** that documents the filing conventions **and** defines an editing
+boundary for Claude (edit anything inside `gtd/`, nothing outside). Run Claude
+Code from inside the folder (`cd <vault>/gtd && claude`) so that boundary is the
+default; `gtd/.claude/settings.json` reinforces it.
+
+(`sample-vault/` is a gitignored local test vault with demo data — not the thing
+you copy.)
 
 ## Settings
 
