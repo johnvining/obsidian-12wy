@@ -232,6 +232,30 @@ export default class TwelvePlugin extends Plugin {
     return fileName.replace(/\.md$/i, "");
   }
 
+  // Render a project name as a link that opens the project note. Hooked up to
+  // Obsidian's hover-preview so hovering shows the note popover.
+  private projectLink(parent: HTMLElement, filePath: string, fileName: string, extraClass?: string) {
+    const cls = extraClass ? `twelve-link ${extraClass}` : "twelve-link";
+    const link = parent.createEl("a", { cls, text: this.projectName(fileName), href: filePath });
+    link.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (file instanceof TFile) {
+        await this.app.workspace.getLeaf(false).openFile(file);
+      }
+    });
+    link.addEventListener("mouseover", (event) => {
+      this.app.workspace.trigger("hover-link", {
+        event,
+        source: "12-plugin",
+        hoverParent: parent,
+        targetEl: link,
+        linktext: filePath,
+      });
+    });
+    return link;
+  }
+
   // ---------------------------------------------------------------------------
   // Cycle + task helpers
   // ---------------------------------------------------------------------------
@@ -567,7 +591,8 @@ export default class TwelvePlugin extends Plugin {
     const tbody = table.createEl("tbody");
     for (const project of projects) {
       const tr = tbody.createEl("tr");
-      tr.createEl("td", { cls: "twelve-wy-name", text: this.projectName(project.fileName) });
+      const nameCell = tr.createEl("td", { cls: "twelve-wy-name" });
+      this.projectLink(nameCell, project.filePath, project.fileName);
 
       const progCell = tr.createEl("td", { cls: "twelve-wy-progress" });
       if (!project.meta.progress.length) {
@@ -760,7 +785,7 @@ export default class TwelvePlugin extends Plugin {
       for (const project of group.items.sort((a, b) => a.fileName.localeCompare(b.fileName))) {
         const block = body.createDiv({ cls: "twelve-project" });
         const head = block.createDiv({ cls: "twelve-project-head" });
-        head.createSpan({ cls: "twelve-project-name", text: this.projectName(project.fileName) });
+        this.projectLink(head, project.filePath, project.fileName, "twelve-project-name");
         head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${project.tasks.length} open` });
         this.renderTaskTable(block, this.sortTasks(project.tasks), { showProject: false });
       }

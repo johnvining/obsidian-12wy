@@ -320,6 +320,15 @@
   font-weight: 600;
   white-space: nowrap;
 }
+.twelve-link {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.twelve-link:hover {
+  color: inherit;
+  text-decoration: underline;
+}
 .twelve-wy-progress {
   width: 100%;
 }
