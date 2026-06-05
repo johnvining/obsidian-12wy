@@ -232,11 +232,50 @@ export default class TwelvePlugin extends Plugin {
     return fileName.replace(/\.md$/i, "");
   }
 
-  // Render a project name as a link that opens the project note. Hooked up to
-  // Obsidian's hover-preview so hovering shows the note popover.
-  private projectLink(parent: HTMLElement, filePath: string, fileName: string, extraClass?: string) {
+  // A project's display name (its H1 title) — consistent everywhere a project is
+  // shown, rather than the raw filename slug.
+  private projectTitle(filePath: string): string {
+    const meta = this.taskIndex.getMeta(filePath);
+    if (meta?.title) {
+      return meta.title;
+    }
+    const name = filePath.split("/").pop() ?? filePath;
+    return this.projectName(name);
+  }
+
+  private slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/['’]/g, "") // drop apostrophes so "People's" → "peoples"
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  // Resolve a human commitment label (e.g. "Strength", "People's Poems") to the
+  // path of the matching project note ("strength-health.md", "peoples-poems.md").
+  private resolveProjectPath(label: string): string | null {
+    const slug = this.slugify(label);
+    if (!slug) {
+      return null;
+    }
+    const first = slug.split("-")[0];
+    const candidates = this.taskIndex
+      .getSnapshots()
+      .filter((s) => !this.isCycleInfrastructure(s.filePath))
+      .map((s) => ({ path: s.filePath, slug: this.slugify(this.projectName(s.fileName)) }));
+    return (
+      candidates.find((c) => c.slug === slug)?.path ??
+      candidates.find((c) => c.slug.startsWith(`${slug}-`))?.path ??
+      candidates.find((c) => c.slug.split("-")[0] === first)?.path ??
+      null
+    );
+  }
+
+  // Render `text` as a link that opens `filePath`, wired to Obsidian's
+  // hover-preview so hovering shows the note popover.
+  private fileLink(parent: HTMLElement, filePath: string, text: string, extraClass?: string) {
     const cls = extraClass ? `twelve-link ${extraClass}` : "twelve-link";
-    const link = parent.createEl("a", { cls, text: this.projectName(fileName), href: filePath });
+    const link = parent.createEl("a", { cls, text, href: filePath });
     link.addEventListener("click", async (event) => {
       event.preventDefault();
       const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -255,6 +294,17 @@ export default class TwelvePlugin extends Plugin {
     });
     return link;
   }
+
+  // A project shown as a pill: a link when the note exists, plain pill otherwise.
+  private projectPill(parent: HTMLElement, label: string, filePath: string | null, extraClass = "") {
+    const cls = `twelve-pill ${extraClass}`.trim();
+    if (filePath) {
+      this.fileLink(parent, filePath, label, cls);
+    } else {
+      parent.createSpan({ cls, text: label });
+    }
+  }
+
 
   // ---------------------------------------------------------------------------
   // Cycle + task helpers
@@ -429,7 +479,9 @@ export default class TwelvePlugin extends Plugin {
       const textWrap = row.createDiv({ cls: "twelve-row-text" });
       const tagMatch = /^\[([^\]]+)\]\s*(.*)$/.exec(item.text);
       if (tagMatch) {
-        textWrap.createSpan({ cls: "twelve-tag", text: tagMatch[1] });
+        const path = this.resolveProjectPath(tagMatch[1]);
+        const label = path ? this.projectTitle(path) : tagMatch[1];
+        this.projectPill(textWrap, label, path, "twelve-pill-inline");
         textWrap.createSpan({ text: tagMatch[2] });
       } else {
         textWrap.createSpan({ text: item.text });
@@ -460,7 +512,7 @@ export default class TwelvePlugin extends Plugin {
         if (marker === "TODAY") {
           continue;
         }
-        textCell.createSpan({ cls: "twelve-chip", text: marker.toLowerCase() });
+        textCell.createSpan({ cls: "twelve-pill twelve-pill-marker", text: marker.toLowerCase() });
       }
       textCell.setAttr("title", "Double-click to edit");
       textCell.addEventListener("dblclick", () => this.editTaskText(task));
@@ -475,10 +527,10 @@ export default class TwelvePlugin extends Plugin {
       }
       if (opts.showProject) {
         const projectCell = tr.createEl("td", { cls: "twelve-cell-project" });
-        projectCell.createSpan({ cls: "twelve-pill", text: this.projectName(task.fileName) });
+        this.projectPill(projectCell, this.projectTitle(task.filePath), task.filePath);
       }
       if (opts.actions) {
-        const actions = tr.createEl("td", { cls: "twelve-cell-actions" });
+        const actions = tr.createEl("td", { cls: "twelve-cell-actions" }).createDiv({ cls: "twelve-actions" });
         this.iconButton(actions, "corner-up-left", "Remove from today", async () => {
           await this.removeMarkerFromTask(task, "TODAY");
         });
@@ -592,7 +644,7 @@ export default class TwelvePlugin extends Plugin {
     for (const project of projects) {
       const tr = tbody.createEl("tr");
       const nameCell = tr.createEl("td", { cls: "twelve-wy-name" });
-      this.projectLink(nameCell, project.filePath, project.fileName);
+      this.projectPill(nameCell, this.projectTitle(project.filePath), project.filePath);
 
       const progCell = tr.createEl("td", { cls: "twelve-wy-progress" });
       if (!project.meta.progress.length) {
@@ -785,7 +837,7 @@ export default class TwelvePlugin extends Plugin {
       for (const project of group.items.sort((a, b) => a.fileName.localeCompare(b.fileName))) {
         const block = body.createDiv({ cls: "twelve-project" });
         const head = block.createDiv({ cls: "twelve-project-head" });
-        this.projectLink(head, project.filePath, project.fileName, "twelve-project-name");
+        this.projectPill(head, this.projectTitle(project.filePath), project.filePath, "twelve-project-name");
         head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${project.tasks.length} open` });
         this.renderTaskTable(block, this.sortTasks(project.tasks), { showProject: false });
       }

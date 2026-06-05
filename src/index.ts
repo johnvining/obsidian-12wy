@@ -29,6 +29,7 @@ export interface ProjectMeta {
   is12WY: boolean;
   isTravel: boolean;
   progress: ProgressMetric[];
+  title: string;
 }
 
 export interface FileSnapshot {
@@ -154,7 +155,7 @@ export class TaskIndex {
     }
 
     const rawLines = content.split(/\r?\n/);
-    const meta = this.extractMeta(rawLines);
+    const meta = this.extractMeta(rawLines, file.name);
     const tasks: Task[] = [];
 
     rawLines.forEach((line, index) => {
@@ -172,12 +173,27 @@ export class TaskIndex {
     });
   }
 
-  private extractMeta(lines: string[]): ProjectMeta {
+  private extractMeta(lines: string[], fileName: string): ProjectMeta {
     const content = lines.join("\n");
     const is12WY = STATUS_12WY_RE.test(content);
     const isTravel = STATUS_TRAVEL_RE.test(content);
     const progress = this.extractProgress(lines);
-    return { is12WY, isTravel, progress };
+    const title = this.extractTitle(lines, fileName);
+    return { is12WY, isTravel, progress, title };
+  }
+
+  // A project's display name: its first `# H1`, else a prettified filename.
+  private extractTitle(lines: string[], fileName: string): string {
+    for (const line of lines) {
+      const h1 = /^#\s+(.+?)\s*$/.exec(line);
+      if (h1) {
+        return h1[1].trim();
+      }
+    }
+    return fileName
+      .replace(/\.md$/i, "")
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   // Collect one or more progress metrics declared under a `**12WY Progress:**`

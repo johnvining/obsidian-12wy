@@ -76,6 +76,9 @@
   color: var(--twelve-faint);
   font-weight: 500;
 }
+/* One canonical "pill" used for every short label (projects, commitment tags,
+   markers). Variants below only tweak tone/placement so the family stays
+   visually consistent. */
 .twelve-pill {
   display: inline-block;
   padding: 0.04rem 0.45rem;
@@ -83,7 +86,33 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
   font-size: 0.72rem;
+  line-height: 1.5;
   white-space: nowrap;
+  vertical-align: baseline;
+}
+/* Pill that is also a project link. */
+a.twelve-pill.twelve-link {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+a.twelve-pill.twelve-link:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-border);
+  text-decoration: none;
+}
+/* Leading [Tag] inside a check-list row. */
+.twelve-pill-inline {
+  margin-right: 0.4rem;
+}
+/* Status markers (waiting, errands, …) — same family, lighter/uppercase. */
+.twelve-pill-marker {
+  margin-left: 0.35rem;
+  background: transparent;
+  border: 1px solid var(--twelve-line);
+  color: var(--twelve-faint);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .twelve-empty {
@@ -129,16 +158,6 @@
   text-decoration: line-through;
   color: var(--twelve-faint);
 }
-.twelve-tag {
-  display: inline-block;
-  margin-right: 0.4rem;
-  padding: 0.01rem 0.4rem;
-  border-radius: 0.3rem;
-  background: var(--background-modifier-hover);
-  color: var(--twelve-green);
-  font-size: 0.7rem;
-  font-weight: 600;
-}
 
 /* ---- Task table (today / forecast / waiting / projects / recurring) ----- */
 .twelve-view table.twelve-task-table td {
@@ -159,17 +178,6 @@
 .twelve-task-tr.is-done .twelve-cell-text {
   text-decoration: line-through;
   color: var(--twelve-faint);
-}
-.twelve-chip {
-  display: inline-block;
-  margin-left: 0.35rem;
-  padding: 0.01rem 0.35rem;
-  border-radius: 0.3rem;
-  border: 1px solid var(--twelve-line);
-  color: var(--twelve-faint);
-  font-size: 0.64rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 .twelve-cell-meta {
   white-space: nowrap;
@@ -200,9 +208,13 @@
   width: 1%;
 }
 .twelve-cell-actions {
-  white-space: nowrap;
-  text-align: right;
   width: 1%;
+}
+.twelve-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 0.05rem;
 }
 
 .twelve-icon-button {
