@@ -289,7 +289,7 @@
   background: var(--background-modifier-hover);
 }
 .twelve-card-title {
-  font-family: var(--font-text-theme, serif);
+  font-family: var(--font-interface);
   font-size: 0.98rem;
   font-weight: 700;
 }
