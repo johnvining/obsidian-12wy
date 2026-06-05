@@ -1124,6 +1124,7 @@ export default class TwelvePlugin extends Plugin {
   // Delete actions tucked to the right of the text.
   private renderTriageRow(list: HTMLElement, task: Task) {
     const row = list.createDiv({ cls: "twelve-triage-row" });
+    this.checkbox(row, task.status === "done", () => this.toggleTaskDone(task));
     this.renderTodayToggle(row, task);
     const text = row.createSpan({ cls: "twelve-triage-text", text: task.text });
     text.setAttr("title", "Double-click to edit");
