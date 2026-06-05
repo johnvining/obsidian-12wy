@@ -35,10 +35,20 @@ const DEFAULT_SETTINGS: TwelveSettings = {
   includeRecurringFile: true,
 };
 
-const ACTIVE_PROJECT_FOLDER = "projects - active/";
+const COMMITTED_PROJECT_FOLDERS = ["projects - this year/", "projects - active/"];
+const KTLO_PROJECT_FOLDER = "projects - ktlo/";
+const NEXT_PROJECT_FOLDER = "projects - next year/";
 const TWELVE_WY_FOLDER = "12wy/";
 const TICKLER_FOLDER = "tickler/";
 const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
+
+type ProjectTier = "committed" | "ktlo" | "next";
+
+const TIER_LABELS: Record<ProjectTier, string> = {
+  committed: "This Year",
+  ktlo: "KTLO",
+  next: "Next Year",
+};
 
 export default class TwelvePlugin extends Plugin {
   private taskIndex!: TaskIndex;
@@ -344,16 +354,42 @@ export default class TwelvePlugin extends Plugin {
       .getTasks()
       .filter((task) => !this.isExcludedPath(task.filePath))
       .filter((task) => !this.isCycleInfrastructure(task.filePath))
+      .filter((task) => !this.isParked(task.filePath))
       .filter(
         (task) => this.isVisibleToday(task, today) || (task.status === "done" && task.done === todayToken)
       );
   }
 
-  private isCycleInfrastructure(path: string): boolean {
+  // Path relative to the configured GTD root folder.
+  private toRelative(path: string): string {
     const root = this.getNormalizedRootFolder();
     const prefix = root ? `${root}/` : "";
-    const rel = root && path.startsWith(prefix) ? path.slice(prefix.length) : path;
-    return rel.startsWith("12wy/");
+    return root && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+  }
+
+  private isCycleInfrastructure(path: string): boolean {
+    return this.toRelative(path).startsWith(TWELVE_WY_FOLDER);
+  }
+
+  // Folder-based project tier. Null for non-project files (errands, inbox, etc.).
+  private projectTier(path: string): ProjectTier | null {
+    const rel = this.toRelative(path);
+    if (COMMITTED_PROJECT_FOLDERS.some((folder) => rel.startsWith(folder))) {
+      return "committed";
+    }
+    if (rel.startsWith(KTLO_PROJECT_FOLDER)) {
+      return "ktlo";
+    }
+    if (rel.startsWith(NEXT_PROJECT_FOLDER)) {
+      return "next";
+    }
+    return null;
+  }
+
+  // Parked (next-year) projects take no action: their tasks are kept out of the
+  // surfaced/forecast/waiting lists.
+  private isParked(path: string): boolean {
+    return this.projectTier(path) === "next";
   }
 
   private sortTasks(tasks: Task[]): Task[] {
@@ -477,15 +513,11 @@ export default class TwelvePlugin extends Plugin {
       }
       this.checkbox(row, item.status === "done", () => this.toggleListLine(file, item));
       const textWrap = row.createDiv({ cls: "twelve-row-text" });
-      const tagMatch = /^\[([^\]]+)\]\s*(.*)$/.exec(item.text);
-      if (tagMatch) {
-        const path = this.resolveProjectPath(tagMatch[1]);
-        const label = path ? this.projectTitle(path) : tagMatch[1];
+      const { label, path, rest } = this.parseCommitmentLabel(item.text, file.path);
+      if (label !== null) {
         this.projectPill(textWrap, label, path, "twelve-pill-inline");
-        textWrap.createSpan({ text: tagMatch[2] });
-      } else {
-        textWrap.createSpan({ text: item.text });
       }
+      textWrap.createSpan({ text: rest });
     }
   }
 
@@ -549,7 +581,12 @@ export default class TwelvePlugin extends Plugin {
     const tasks = this.taskIndex
       .getTasks()
       .filter((task) => task.due && task.status !== "done" && task.status !== "cancelled")
-      .filter((task) => !this.isExcludedPath(task.filePath) && !this.isCycleInfrastructure(task.filePath))
+      .filter(
+        (task) =>
+          !this.isExcludedPath(task.filePath) &&
+          !this.isCycleInfrastructure(task.filePath) &&
+          !this.isParked(task.filePath)
+      )
       .sort((a, b) => {
         const aDate = this.parseDateToken(a.due!);
         const bDate = this.parseDateToken(b.due!);
@@ -588,7 +625,8 @@ export default class TwelvePlugin extends Plugin {
 
     const tasks = this.taskIndex.getTasks();
     const open = (task: Task) => task.status !== "done" && task.status !== "cancelled";
-    const visiblePath = (path: string) => !this.isExcludedPath(path) && !this.isCycleInfrastructure(path);
+    const visiblePath = (path: string) =>
+      !this.isExcludedPath(path) && !this.isCycleInfrastructure(path) && !this.isParked(path);
     const visible = (task: Task) => visiblePath(task.filePath);
 
     const todayCount = this.getSurfacedTasks().filter((task) => task.status !== "done").length;
@@ -598,8 +636,8 @@ export default class TwelvePlugin extends Plugin {
     const recurringCount = this.getRecurringTasks().length;
     const projectCount = this.taskIndex
       .getSnapshots()
-      .filter((s) => visiblePath(s.filePath) && s.tasks.some(open)).length;
-    const wyCount = this.taskIndex.getSnapshots().filter((s) => s.meta.is12WY).length;
+      .filter((s) => visiblePath(s.filePath) && this.projectTier(s.filePath) && s.tasks.some(open)).length;
+    const wyCount = this.taskIndex.getSnapshots().filter((s) => this.projectTier(s.filePath) === "committed").length;
 
     const grid = container.createDiv({ cls: "twelve-dash-grid" });
     this.dashCard(grid, "Today", todayCount, "today");
@@ -610,7 +648,8 @@ export default class TwelvePlugin extends Plugin {
     this.dashCard(grid, "Forecast", forecastCount, "forecast");
     this.dashCard(grid, "Recurring", recurringCount, "recurring");
 
-    this.render12WYTable(container, cycle?.weekNumber ?? 1);
+    const slices = cycle?.weekFile ? await this.getWeekSlices(cycle.weekFile) : new Map();
+    this.render12WYTable(container, cycle?.weekNumber ?? 1, slices);
   }
 
   private dashCard(grid: HTMLElement, title: string, count: number, view: string) {
@@ -622,22 +661,27 @@ export default class TwelvePlugin extends Plugin {
     card.addEventListener("click", () => this.openView(view));
   }
 
-  private render12WYTable(container: HTMLElement, weekNumber: number) {
+  private render12WYTable(
+    container: HTMLElement,
+    weekNumber: number,
+    weekSlices: Map<string, { done: number; total: number }> = new Map()
+  ) {
     const projects = this.taskIndex
       .getSnapshots()
-      .filter((s) => s.meta.is12WY)
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+      .filter((s) => this.projectTier(s.filePath) === "committed")
+      .sort((a, b) => this.projectTitle(a.filePath).localeCompare(this.projectTitle(b.filePath)));
 
     const body = this.section(container, "12 Week Year");
     if (!projects.length) {
-      this.renderEmpty(body, "No 12WY projects found.");
+      this.renderEmpty(body, "No committed projects found (put 12WY projects in projects - active/).");
       return;
     }
 
     const table = body.createEl("table", { cls: "twelve-wy-table" });
     const headRow = table.createEl("thead").createEl("tr");
     headRow.createEl("th", { text: "Project" });
-    headRow.createEl("th", { text: "Progress (done / target)" });
+    headRow.createEl("th", { text: "Commitment (done / target)" });
+    headRow.createEl("th", { cls: "twelve-wy-week", text: "This week" });
     headRow.createEl("th", { cls: "twelve-wy-open", text: "Open" });
 
     const tbody = table.createEl("tbody");
@@ -648,7 +692,7 @@ export default class TwelvePlugin extends Plugin {
 
       const progCell = tr.createEl("td", { cls: "twelve-wy-progress" });
       if (!project.meta.progress.length) {
-        progCell.createSpan({ cls: "twelve-faint", text: "—" });
+        progCell.createSpan({ cls: "twelve-faint", text: "no commitment set" });
       } else {
         for (const metric of project.meta.progress) {
           const line = progCell.createDiv({ cls: "twelve-metric" });
@@ -660,9 +704,65 @@ export default class TwelvePlugin extends Plugin {
         }
       }
 
+      const slice = weekSlices.get(project.filePath);
+      const weekCell = tr.createEl("td", { cls: "twelve-wy-week" });
+      if (slice) {
+        const done = slice.done === slice.total && slice.total > 0;
+        weekCell.createSpan({
+          cls: `twelve-week-slice ${done ? "is-complete" : ""}`.trim(),
+          text: `${slice.done}/${slice.total}`,
+        });
+      } else {
+        weekCell.createSpan({ cls: "twelve-faint", text: "—" });
+      }
+
       const openTasks = project.tasks.filter((t) => t.status !== "done" && t.status !== "cancelled").length;
       tr.createEl("td", { cls: "twelve-wy-open", text: String(openTasks) });
     }
+  }
+
+  // Aggregate this week's commitments per linked project: { path → done/total }.
+  private async getWeekSlices(weekFile: TFile): Promise<Map<string, { done: number; total: number }>> {
+    const content = await this.app.vault.cachedRead(weekFile);
+    const commitments = this.parseListSection(content, "## Commitments");
+    const slices = new Map<string, { done: number; total: number }>();
+    for (const item of commitments) {
+      const { path } = this.parseCommitmentLabel(item.text, weekFile.path);
+      if (!path) {
+        continue;
+      }
+      const slice = slices.get(path) ?? { done: 0, total: 0 };
+      slice.total += 1;
+      if (item.status === "done") {
+        slice.done += 1;
+      }
+      slices.set(path, slice);
+    }
+    return slices;
+  }
+
+  // Parse a commitment's leading project reference. Prefers an explicit
+  // [[wikilink]] (exact), falls back to a fuzzy [Tag], else no project.
+  private parseCommitmentLabel(
+    text: string,
+    sourcePath: string
+  ): { label: string | null; path: string | null; rest: string } {
+    const wiki = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]\s*(.*)$/.exec(text);
+    if (wiki) {
+      const target = wiki[1].trim();
+      const alias = wiki[2]?.trim();
+      const dest = this.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+      const path = dest?.path ?? null;
+      const label = alias ?? (path ? this.projectTitle(path) : target);
+      return { label, path, rest: wiki[3] };
+    }
+    const tag = /^\[([^\]]+)\]\s*(.*)$/.exec(text);
+    if (tag) {
+      const path = this.resolveProjectPath(tag[1]);
+      const label = path ? this.projectTitle(path) : tag[1];
+      return { label, path, rest: tag[2] };
+    }
+    return { label: null, path: null, rest: text };
   }
 
   private paceVariant(current: number, expected: number): string {
@@ -730,7 +830,12 @@ export default class TwelvePlugin extends Plugin {
     const tasks = this.taskIndex
       .getTasks()
       .filter((task) => task.markers.includes("WAITING") && task.status !== "done" && task.status !== "cancelled")
-      .filter((task) => !this.isExcludedPath(task.filePath) && !this.isCycleInfrastructure(task.filePath));
+      .filter(
+        (task) =>
+          !this.isExcludedPath(task.filePath) &&
+          !this.isCycleInfrastructure(task.filePath) &&
+          !this.isParked(task.filePath)
+      );
 
     const body = this.section(container, "Waiting", tasks.length || undefined);
     if (!tasks.length) {
@@ -804,42 +909,45 @@ export default class TwelvePlugin extends Plugin {
   // ---------------------------------------------------------------------------
 
   private async renderProjects(container: HTMLElement) {
-    // Drive project grouping off the cached index snapshots so we don't re-read
-    // every project file from disk on each render.
-    const projectEntries = this.taskIndex
-      .getSnapshots()
-      .filter((snapshot) => !this.isExcludedPath(snapshot.filePath) && !this.isCycleInfrastructure(snapshot.filePath))
-      .map((snapshot) => ({
-        filePath: snapshot.filePath,
-        fileName: snapshot.fileName,
-        is12WY: snapshot.meta.is12WY,
-        isTravel: snapshot.meta.isTravel,
-        tasks: snapshot.tasks.filter((task) => task.status !== "done" && task.status !== "cancelled"),
-      }))
-      .filter((project) => project.tasks.length > 0);
+    const isOpen = (task: Task) => task.status !== "done" && task.status !== "cancelled";
+    const projects = this.taskIndex.getSnapshots().filter((s) => this.projectTier(s.filePath) !== null);
 
-    if (!projectEntries.length) {
-      this.renderEmpty(this.section(container, "Projects"), "No active projects found.");
+    if (!projects.length) {
+      this.renderEmpty(this.section(container, "Projects"), "No projects found.");
       return;
     }
 
-    const groups = [
-      { title: "12WY Projects", items: projectEntries.filter((p) => p.is12WY) },
-      { title: "Trips", items: projectEntries.filter((p) => !p.is12WY && p.isTravel) },
-      { title: "Other Projects", items: projectEntries.filter((p) => !p.is12WY && !p.isTravel) },
-    ];
+    const tierProjects = (tier: ProjectTier) =>
+      projects
+        .filter((s) => this.projectTier(s.filePath) === tier)
+        .sort((a, b) => this.projectTitle(a.filePath).localeCompare(this.projectTitle(b.filePath)));
 
-    for (const group of groups) {
-      if (!group.items.length) {
+    // This Year + KTLO show their open tasks; Next Year is parked (name only,
+    // no surfaced tasks) so you can still see what you deliberately deferred.
+    for (const tier of ["committed", "ktlo"] as ProjectTier[]) {
+      const items = tierProjects(tier)
+        .map((s) => ({ snapshot: s, tasks: s.tasks.filter(isOpen) }))
+        .filter((p) => p.tasks.length > 0);
+      if (!items.length) {
         continue;
       }
-      const body = this.section(container, group.title, group.items.length);
-      for (const project of group.items.sort((a, b) => a.fileName.localeCompare(b.fileName))) {
+      const body = this.section(container, TIER_LABELS[tier], items.length);
+      for (const { snapshot, tasks } of items) {
         const block = body.createDiv({ cls: "twelve-project" });
         const head = block.createDiv({ cls: "twelve-project-head" });
-        this.projectPill(head, this.projectTitle(project.filePath), project.filePath, "twelve-project-name");
-        head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${project.tasks.length} open` });
-        this.renderTaskTable(block, this.sortTasks(project.tasks), { showProject: false });
+        this.projectPill(head, this.projectTitle(snapshot.filePath), snapshot.filePath, "twelve-project-name");
+        head.createSpan({ cls: "twelve-badge twelve-badge-soft", text: `${tasks.length} open` });
+        this.renderTaskTable(block, this.sortTasks(tasks), { showProject: false });
+      }
+    }
+
+    const parked = tierProjects("next");
+    if (parked.length) {
+      const body = this.section(container, TIER_LABELS.next, parked.length);
+      const list = body.createDiv({ cls: "twelve-list" });
+      for (const snapshot of parked) {
+        const row = list.createDiv({ cls: "twelve-row" });
+        this.projectPill(row.createDiv({ cls: "twelve-row-text" }), this.projectTitle(snapshot.filePath), snapshot.filePath);
       }
     }
   }
@@ -882,7 +990,8 @@ export default class TwelvePlugin extends Plugin {
     const head = this.section(container, `12WY · Week ${cycle.weekNumber}`);
     head.createDiv({ cls: "twelve-faint", text: `Cycle: ${cycle.start} → ${cycle.end}` });
 
-    this.render12WYTable(container, cycle.weekNumber);
+    const slices = cycle.weekFile ? await this.getWeekSlices(cycle.weekFile) : new Map();
+    this.render12WYTable(container, cycle.weekNumber, slices);
 
     if (cycle.weekFile) {
       const weekContent = await this.app.vault.cachedRead(cycle.weekFile);
@@ -1364,7 +1473,12 @@ export default class TwelvePlugin extends Plugin {
       return false;
     }
 
-    if (prefixedPath.startsWith(ACTIVE_PROJECT_FOLDER) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
+    if (
+      COMMITTED_PROJECT_FOLDERS.some((folder) => prefixedPath.startsWith(folder)) ||
+      prefixedPath.startsWith(KTLO_PROJECT_FOLDER) ||
+      prefixedPath.startsWith(NEXT_PROJECT_FOLDER) ||
+      prefixedPath.startsWith(TWELVE_WY_FOLDER)
+    ) {
       return true;
     }
 

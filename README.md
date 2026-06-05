@@ -60,13 +60,26 @@ need adjustment to match your real vault. The `sample-vault/` files are the
 canonical examples.
 
 - **Cycle:** `12wy/current.md` contains `**Dates:** YYYY-MM-DD to YYYY-MM-DD`.
-- **Weeks:** `12wy/weeks/wNN.md` with a `## Commitments` checkbox list (optional
-  leading `[Tag]` per line) and a `## Daily Tracker` markdown table (first
-  column is the day, e.g. `M 06/01`; other cells are `Y` or blank). Rows dated
-  after today are hidden; clicking a cell toggles `Y`.
-- **12WY projects:** a note under `projects - active/` (or `12wy/`) with
-  `**Status:** … [12WY]`. Progress is declared under a `**12WY Progress:**`
-  marker, one metric per `- current / target label` bullet (multiple allowed):
+- **Weeks:** `12wy/weeks/wNN.md` with a `## Commitments` checkbox list and a
+  `## Daily Tracker` markdown table (first column is the day, e.g. `M 06/01`;
+  other cells are `Y` or blank). Rows dated after today are hidden; clicking a
+  cell toggles `Y`. Each commitment links to its project with a leading
+  `[[wikilink]]` (a fuzzy `[Tag]` is also accepted); the dashboard rolls these
+  up per project in a "This week" column:
+
+  ```
+  - [ ] [[peoples-poems]] Post 10 poems
+  ```
+
+- **Project tiers — by folder** (relative to the GTD root):
+  - `projects - this year/` → **This Year** (committed 12WY focus)
+  - `projects - ktlo/` → **KTLO** (only dated/`[TODAY]` maintenance tasks surface)
+  - `projects - next year/` → **Next Year** (parked; tasks never surface)
+  - `projects - archive/` → **Archive** (done; never indexed)
+  - `projects - active/` is a legacy alias for *This Year*.
+- **Commitment = progress target.** A This-Year project declares its cycle
+  commitment under a `**12WY Progress:**` marker, one metric per
+  `- current / target label` bullet (multiple allowed):
 
   ```
   **12WY Progress:**
@@ -76,7 +89,6 @@ canonical examples.
 
 - **Errands:** `errands.md` with `##` category headings; each heading becomes a
   group in the errands view.
-- **Travel/trips:** `**Status:** … [TRAVEL]`.
 
 All paths above are relative to the **GTD folder** (below).
 

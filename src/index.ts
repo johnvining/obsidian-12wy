@@ -2,7 +2,16 @@ import { App, TFile } from "obsidian";
 import { parseTaskLine } from "./parser";
 import type { Task } from "./types";
 
-const ACTIVE_PROJECT_FOLDER = "projects - active/";
+// Project tiers are determined by folder (relative to the GTD root):
+//   projects - this year/ → "This Year" (12WY focus, committed)
+//   projects - ktlo/      → KTLO (keep the lights on, maintenance)
+//   projects - next year/ → Next Year (parked — tasks never surface)
+//   projects - archive/   → Archive (done — excluded/unindexed everywhere)
+// `projects - active/` is kept as a legacy alias for "This Year".
+const COMMITTED_PROJECT_FOLDERS = ["projects - this year/", "projects - active/"];
+const KTLO_PROJECT_FOLDER = "projects - ktlo/";
+const NEXT_PROJECT_FOLDER = "projects - next year/";
+const PROJECT_TIER_FOLDERS = [...COMMITTED_PROJECT_FOLDERS, KTLO_PROJECT_FOLDER, NEXT_PROJECT_FOLDER];
 const TWELVE_WY_FOLDER = "12wy/";
 const TICKLER_FOLDER = "tickler/";
 const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
@@ -127,7 +136,7 @@ export class TaskIndex {
       return false;
     }
 
-    if (prefixedPath.startsWith(ACTIVE_PROJECT_FOLDER) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
+    if (PROJECT_TIER_FOLDERS.some((folder) => prefixedPath.startsWith(folder)) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
       return true;
     }
 
