@@ -1043,6 +1043,14 @@ export default class TwelvePlugin extends Plugin {
     }
     counts.createSpan({ cls: "twelve-faint", text: `${tasks.length} open` });
 
+    // Open the project note (distinct from the expand/collapse click).
+    this.iconButton(head, "arrow-up-right", "Open note", async () => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) {
+        await this.app.workspace.getLeaf(false).openFile(file);
+      }
+    });
+
     // Build the task list once; show/hide it on click via the DOM (no full
     // re-render needed, since expanding changes no file).
     const list = block.createDiv({ cls: "twelve-project-tasks" });

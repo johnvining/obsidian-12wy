@@ -269,7 +269,8 @@ a.twelve-pill.twelve-link:hover {
   width: 0.9rem;
   height: 0.9rem;
 }
-.twelve-task-tr:hover .twelve-icon-button {
+.twelve-task-tr:hover .twelve-icon-button,
+.twelve-project-head:hover .twelve-icon-button {
   opacity: 0.6;
 }
 .twelve-icon-button:hover {
