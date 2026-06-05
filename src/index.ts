@@ -13,7 +13,6 @@ const KTLO_PROJECT_FOLDER = "projects - ktlo/";
 const NEXT_PROJECT_FOLDER = "projects - next year/";
 const PROJECT_TIER_FOLDERS = [...COMMITTED_PROJECT_FOLDERS, KTLO_PROJECT_FOLDER, NEXT_PROJECT_FOLDER];
 const TWELVE_WY_FOLDER = "12wy/";
-const TICKLER_FOLDER = "tickler/";
 const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
 const EXCLUDED_PROJECT_PREFIXES = ["projects - archive/", "projects - new 12wy/"];
 
@@ -55,7 +54,6 @@ export class TaskIndex {
   constructor(
     private app: App,
     private rootFolder: string = "",
-    private includeTicklerFolder: boolean = true,
     private includeRecurringFile: boolean = true
   ) {}
 
@@ -137,10 +135,6 @@ export class TaskIndex {
     }
 
     if (PROJECT_TIER_FOLDERS.some((folder) => prefixedPath.startsWith(folder)) || prefixedPath.startsWith(TWELVE_WY_FOLDER)) {
-      return true;
-    }
-
-    if (this.includeTicklerFolder && prefixedPath.startsWith(TICKLER_FOLDER)) {
       return true;
     }
 

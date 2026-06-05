@@ -13,7 +13,6 @@ export interface Task {
   markers: string[];
   extraTokens: string[];
   tags: string[];
-  due?: string;
   start?: string;
   done?: string;
   every?: string;

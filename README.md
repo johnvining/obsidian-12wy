@@ -30,9 +30,9 @@ Drop a fenced code block into any note:
 | `12 dashboard` | Card grid (counts link to view notes) + the 12-Week-Year pace table |
 | `12 12wy` | Cycle detail: pace table + this week's commitments & tracker |
 | `12 errands` | `errands.md` grouped by its `##` category headings |
-| `12 forecast` | Upcoming dated tasks grouped This Week / Later This Month / Future Months |
+| `12 forecast` | Upcoming **ticklers** (future scheduled dates) grouped This Week / Later This Month / Future Months |
 | `12 waiting` | Tasks marked `[WAITING]` |
-| `12 projects` | Active projects grouped 12WY / Trips / Other |
+| `12 projects` | Projects by tier (This Year / KTLO / Next Year), collapsed; click to triage tasks Today/—/Later |
 | `12 recurring` | Tasks with an `[every:…]` rule |
 
 Dashboard cards open the note that contains the matching `12 <view>` block.
@@ -42,14 +42,18 @@ Dashboard cards open the note that contains the matching `12 <view>` block.
 A task is a normal Markdown checkbox with optional trailing `[bracket]` tokens:
 
 ```
-- [ ] Draft poems 60–65 [TODAY] [due:2026-06-05] [p:high]
+- [ ] Draft poems 60–65 [TODAY] [p:high]
+- [ ] Renew passport [tickler:2026-08-01]
 ```
 
+There are **no due dates**. A task surfaces in Today only via `[TODAY]` (sticky
+until done/re-triaged) or a `[tickler:]` date that has arrived.
+
 - **Status:** `[ ]` todo, `[x]` done, `[/]` in-progress, `[-]` cancelled.
-- **Markers:** `[TODAY]`, `[LATER]`, `[WAITING]`, `[ERRANDS]`, `[URGENT]`, `[SOON]`, `[TRAVEL]`. `[TODAY]`/`[LATER]` are the surface/defer states (mutually exclusive); triage them in the Projects view.
-- **Dates:** `[due:YYYY-MM-DD]`, `[start:YYYY-MM-DD]`, `[done:YYYY-MM-DD]`.
+- **Markers:** `[TODAY]`, `[LATER]`, `[WAITING]`, `[ERRANDS]`, `[URGENT]`, `[SOON]`, `[TRAVEL]`. `[TODAY]`/`[LATER]` are the surface/suppress states (mutually exclusive); triage them in the Projects view.
+- **Dates:** `[tickler:YYYY-MM-DD]` (resurface-on date; `[start:]` is an alias), `[done:YYYY-MM-DD]`.
 - **Recurrence:** `[every:1 week]` (`day(s)`/`week(s)`/`month(s)`). Completing a
-  recurring task spawns the next occurrence with an advanced due date.
+  recurring task spawns the next occurrence as a tickler one interval out.
 - **Other:** `[p:high|med|low]`, `[id:…]`, `#tags`. Trailing `[[wikilinks]]` are
   left intact.
 
@@ -114,7 +118,7 @@ you copy.)
 ## Settings
 
 - **GTD folder** — folder holding your 12WY data + view notes (empty = whole vault).
-- **Include tickler folder** / **Include recurring file** — toggle those sources.
+- **Include recurring file** — whether `recurring.md` is scanned.
 
 ## Known assumptions to confirm
 

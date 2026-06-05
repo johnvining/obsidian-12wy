@@ -20,7 +20,6 @@ import type { Task } from "./types";
 
 interface TwelveSettings {
   rootFolder: string;
-  includeTicklerFolder: boolean;
   includeRecurringFile: boolean;
 }
 
@@ -33,7 +32,6 @@ interface CommitItem {
 
 const DEFAULT_SETTINGS: TwelveSettings = {
   rootFolder: "",
-  includeTicklerFolder: true,
   includeRecurringFile: true,
 };
 
@@ -41,7 +39,6 @@ const COMMITTED_PROJECT_FOLDERS = ["projects - this year/", "projects - active/"
 const KTLO_PROJECT_FOLDER = "projects - ktlo/";
 const NEXT_PROJECT_FOLDER = "projects - next year/";
 const TWELVE_WY_FOLDER = "12wy/";
-const TICKLER_FOLDER = "tickler/";
 const INCLUDED_FILE_NAMES = new Set(["adhoc.md", "errands.md", "inbox.md", "recurring.md"]);
 
 type ProjectTier = "committed" | "ktlo" | "next";
@@ -68,6 +65,11 @@ export default class TwelvePlugin extends Plugin {
     await this.loadSettings();
     this.addSettingTab(new TwelveSettingTab(this.app, this));
     await this.initializeTaskIndex();
+
+    // Promote any ticklers whose date has arrived into real [TODAY] tasks — on
+    // load and periodically, so the rollover happens even if the app stays open.
+    await this.promoteFiredTicklers();
+    this.registerInterval(window.setInterval(() => void this.promoteFiredTicklers(), 30 * 60 * 1000));
 
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
@@ -121,12 +123,7 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private async initializeTaskIndex() {
-    this.taskIndex = new TaskIndex(
-      this.app,
-      this.settings.rootFolder,
-      this.settings.includeTicklerFolder,
-      this.settings.includeRecurringFile
-    );
+    this.taskIndex = new TaskIndex(this.app, this.settings.rootFolder, this.settings.includeRecurringFile);
     // Each index instance starts with no listeners, so registering here (rather
     // than at every call site) keeps exactly one handler attached and avoids the
     // listener leak that previously accumulated on every settings save.
@@ -411,8 +408,8 @@ export default class TwelvePlugin extends Plugin {
       if (pa !== pb) {
         return pa - pb;
       }
-      const da = a.due ? this.parseDateToken(a.due)?.getTime() ?? Infinity : Infinity;
-      const db = b.due ? this.parseDateToken(b.due)?.getTime() ?? Infinity : Infinity;
+      const da = a.start ? this.parseDateToken(a.start)?.getTime() ?? Infinity : Infinity;
+      const db = b.start ? this.parseDateToken(b.start)?.getTime() ?? Infinity : Infinity;
       if (da !== db) {
         return da - db;
       }
@@ -593,7 +590,7 @@ export default class TwelvePlugin extends Plugin {
   private renderTaskTable(
     body: HTMLElement,
     tasks: Task[],
-    opts: { actions?: boolean; showProject?: boolean; showDue?: boolean }
+    opts: { actions?: boolean; showProject?: boolean; showSchedule?: boolean }
   ) {
     const table = body.createEl("table", { cls: "twelve-task-table" });
     const tbody = table.createEl("tbody");
@@ -617,12 +614,12 @@ export default class TwelvePlugin extends Plugin {
       textCell.setAttr("title", "Double-click to edit");
       textCell.addEventListener("dblclick", () => this.editTaskText(task));
 
-      if (opts.showDue) {
+      if (opts.showSchedule) {
         const meta = tr.createEl("td", { cls: "twelve-cell-meta" });
-        const rel = task.due ? this.relativeDate(task.due) : null;
+        const rel = task.start ? this.relativeDate(task.start) : null;
         if (rel) {
-          const due = meta.createSpan({ cls: `twelve-due twelve-due-${rel.tone}`, text: rel.text });
-          due.setAttr("title", task.due!);
+          const when = meta.createSpan({ cls: `twelve-due twelve-due-${rel.tone}`, text: rel.text });
+          when.setAttr("title", task.start!);
         }
       }
       if (opts.showProject) {
@@ -644,26 +641,32 @@ export default class TwelvePlugin extends Plugin {
     }
   }
 
+  // Forecast = a look-ahead of upcoming ticklers (scheduled dates still in the
+  // future), i.e. what will resurface into Today and when.
   private async renderForecast(container: HTMLElement) {
     const today = this.normalizeDate(new Date());
     const tasks = this.taskIndex
       .getTasks()
-      .filter((task) => task.due && task.status !== "done" && task.status !== "cancelled")
+      .filter((task) => task.start && task.status !== "done" && task.status !== "cancelled")
       .filter((task) => !task.markers.includes("LATER"))
+      .filter((task) => {
+        const start = this.parseDateToken(task.start!);
+        return start ? start.getTime() > today.getTime() : false; // future only
+      })
       .filter(
         (task) =>
           !this.isExcludedPath(task.filePath) &&
           !this.isCycleInfrastructure(task.filePath) &&
           !this.isParked(task.filePath)
       )
-      .sort((a, b) => {
-        const aDate = this.parseDateToken(a.due!);
-        const bDate = this.parseDateToken(b.due!);
-        return (aDate?.getTime() ?? Infinity) - (bDate?.getTime() ?? Infinity);
-      });
+      .sort(
+        (a, b) =>
+          (this.parseDateToken(a.start!)?.getTime() ?? Infinity) -
+          (this.parseDateToken(b.start!)?.getTime() ?? Infinity)
+      );
 
     if (!tasks.length) {
-      this.renderEmpty(this.section(container, "Forecast"), "No upcoming tasks found.");
+      this.renderEmpty(this.section(container, "Forecast"), "Nothing scheduled to resurface.");
       return;
     }
 
@@ -681,7 +684,7 @@ export default class TwelvePlugin extends Plugin {
         continue;
       }
       const body = this.section(container, title, groupTasks.length);
-      this.renderTaskTable(body, groupTasks, { showDue: true, showProject: true });
+      this.renderTaskTable(body, groupTasks, { showSchedule: true, showProject: true });
     }
   }
 
@@ -701,7 +704,14 @@ export default class TwelvePlugin extends Plugin {
     const todayCount = this.getSurfacedTasks().filter((task) => task.status !== "done").length;
     const waitingCount = tasks.filter((t) => visible(t) && open(t) && t.markers.includes("WAITING")).length;
     const errandCount = await this.countErrands();
-    const forecastCount = tasks.filter((t) => visible(t) && open(t) && !!t.due).length;
+    const todayNorm = this.normalizeDate(new Date());
+    const forecastCount = tasks.filter((t) => {
+      if (!visible(t) || !open(t) || !t.start) {
+        return false;
+      }
+      const start = this.parseDateToken(t.start);
+      return start ? start.getTime() > todayNorm.getTime() : false;
+    }).length;
     const recurringCount = this.getRecurringTasks().length;
     const projectCount = this.taskIndex
       .getSnapshots()
@@ -1021,13 +1031,16 @@ export default class TwelvePlugin extends Plugin {
     return task.status !== "done" && task.status !== "cancelled";
   }
 
-  // One project in the triage list: a clickable header (title + Today/Later/open
-  // counts) that expands to show its tasks with a 3-way schedule control.
+  // One project in the triage list: a clickable header (title + counts) that
+  // expands to show its active tasks with a 3-way schedule control. [LATER]
+  // ("someday") tasks are tucked into a separate collapsible group so they don't
+  // clutter the active backlog.
   private renderProjectRow(body: HTMLElement, snapshot: FileSnapshot) {
     const path = snapshot.filePath;
-    const tasks = this.sortTasks(snapshot.tasks.filter((t) => this.isOpen(t)));
-    const today = tasks.filter((t) => this.taskSchedule(t) === "today").length;
-    const later = tasks.filter((t) => this.taskSchedule(t) === "later").length;
+    const open = this.sortTasks(snapshot.tasks.filter((t) => this.isOpen(t)));
+    const laterTasks = open.filter((t) => this.taskSchedule(t) === "later");
+    const activeTasks = open.filter((t) => this.taskSchedule(t) !== "later");
+    const todayCount = activeTasks.filter((t) => this.taskSchedule(t) === "today").length;
 
     const block = body.createDiv({ cls: "twelve-project" });
     const head = block.createDiv({ cls: "twelve-project-head twelve-project-toggle" });
@@ -1035,15 +1048,14 @@ export default class TwelvePlugin extends Plugin {
     head.createSpan({ cls: "twelve-project-name", text: this.projectTitle(path) });
 
     const counts = head.createSpan({ cls: "twelve-project-counts" });
-    if (today) {
-      counts.createSpan({ cls: "twelve-count-today", text: `${today} today` });
+    if (todayCount) {
+      counts.createSpan({ cls: "twelve-count-today", text: `${todayCount} today` });
     }
-    if (later) {
-      counts.createSpan({ cls: "twelve-count-later", text: `${later} later` });
+    if (laterTasks.length) {
+      counts.createSpan({ cls: "twelve-count-later", text: `${laterTasks.length} later` });
     }
-    counts.createSpan({ cls: "twelve-faint", text: `${tasks.length} open` });
+    counts.createSpan({ cls: "twelve-faint", text: `${activeTasks.length} open` });
 
-    // Open the project note (distinct from the expand/collapse click).
     this.iconButton(head, "arrow-up-right", "Open note", async () => {
       const file = this.app.vault.getAbstractFileByPath(path);
       if (file instanceof TFile) {
@@ -1051,15 +1063,13 @@ export default class TwelvePlugin extends Plugin {
       }
     });
 
-    // Build the task list once; show/hide it on click via the DOM (no full
-    // re-render needed, since expanding changes no file).
     const list = block.createDiv({ cls: "twelve-project-tasks" });
-    for (const task of tasks) {
-      const row = list.createDiv({ cls: "twelve-triage-row" });
-      this.renderScheduleControl(row, task);
-      const text = row.createSpan({ cls: "twelve-triage-text", text: task.text });
-      text.setAttr("title", "Double-click to edit");
-      text.addEventListener("dblclick", () => this.editTaskText(task));
+    for (const task of activeTasks) {
+      this.renderTriageRow(list, task);
+    }
+
+    if (laterTasks.length) {
+      this.renderLaterGroup(list, path, laterTasks);
     }
 
     const applyExpanded = (expanded: boolean) => {
@@ -1077,6 +1087,53 @@ export default class TwelvePlugin extends Plugin {
       }
       applyExpanded(next);
     });
+  }
+
+  // A collapsible "Later (N)" group for a project's someday tasks.
+  private renderLaterGroup(list: HTMLElement, path: string, laterTasks: Task[]) {
+    const key = `${path}::later`;
+    const group = list.createDiv({ cls: "twelve-later-group" });
+    const head = group.createDiv({ cls: "twelve-later-head" });
+    const caret = head.createSpan({ cls: "twelve-caret" });
+    head.createSpan({ cls: "twelve-later-label", text: `Later (${laterTasks.length})` });
+
+    const inner = group.createDiv({ cls: "twelve-later-list" });
+    for (const task of laterTasks) {
+      this.renderTriageRow(inner, task);
+    }
+
+    const apply = (expanded: boolean) => {
+      inner.style.display = expanded ? "" : "none";
+      setIcon(caret, expanded ? "chevron-down" : "chevron-right");
+    };
+    apply(this.expandedProjects.has(key));
+    head.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const next = !this.expandedProjects.has(key);
+      if (next) {
+        this.expandedProjects.add(key);
+      } else {
+        this.expandedProjects.delete(key);
+      }
+      apply(next);
+    });
+  }
+
+  // A task row in the triage view: schedule control + text + a tickler date chip
+  // (so a scheduled task is visible, never silently triaged away).
+  private renderTriageRow(list: HTMLElement, task: Task) {
+    const row = list.createDiv({ cls: "twelve-triage-row" });
+    this.renderScheduleControl(row, task);
+    const text = row.createSpan({ cls: "twelve-triage-text", text: task.text });
+    text.setAttr("title", "Double-click to edit");
+    text.addEventListener("dblclick", () => this.editTaskText(task));
+    if (task.start) {
+      const rel = this.relativeDate(task.start);
+      if (rel) {
+        const chip = row.createSpan({ cls: `twelve-tickler twelve-due-${rel.tone}`, text: rel.text });
+        chip.setAttr("title", `Tickler: ${task.start}`);
+      }
+    }
   }
 
   // A 3-way segmented control: Later · — · Today.
@@ -1116,15 +1173,15 @@ export default class TwelvePlugin extends Plugin {
   private async renderRecurring(container: HTMLElement) {
     const tasks = this.getRecurringTasks().sort(
       (a, b) =>
-        (this.parseDateToken(a.due ?? "")?.getTime() ?? Infinity) -
-        (this.parseDateToken(b.due ?? "")?.getTime() ?? Infinity)
+        (this.parseDateToken(a.start ?? "")?.getTime() ?? Infinity) -
+        (this.parseDateToken(b.start ?? "")?.getTime() ?? Infinity)
     );
     const body = this.section(container, "Recurring", tasks.length || undefined);
     if (!tasks.length) {
       this.renderEmpty(body, "No recurring tasks found.");
       return;
     }
-    this.renderTaskTable(body, tasks, { showDue: true, showProject: true });
+    this.renderTaskTable(body, tasks, { showSchedule: true, showProject: true });
   }
 
   // ---------------------------------------------------------------------------
@@ -1182,15 +1239,17 @@ export default class TwelvePlugin extends Plugin {
       lines[lineIndex] = serializeTask(currentDoneTask);
 
       if (task.every) {
-        const nextDue = this.computeNextRecurringDue(task.every, task.due || todayToken, new Date());
-        if (nextDue) {
+        // The next occurrence is a tickler dated one interval out — it stays
+        // parked until then, when it resurfaces in Today.
+        const nextDate = this.computeNextRecurringDue(task.every, task.start || todayToken, new Date());
+        if (nextDate) {
           const newTask: Task = {
             ...task,
             status: "todo",
             done: undefined,
             lineNumber: -1,
             lineText: "",
-            due: nextDue,
+            start: nextDate,
             markers: task.markers.filter((marker) => marker !== "TODAY"),
           };
           const newLine = serializeTask(newTask);
@@ -1216,39 +1275,113 @@ export default class TwelvePlugin extends Plugin {
     return updatedTask;
   }
 
-  // Set a task's schedule bucket: "today", "later", or "none". TODAY and LATER
-  // are mutually exclusive.
+  // Set a task's schedule bucket: "today", "later", or "none". This is an
+  // explicit manual decision, so it also clears any pending tickler date (the
+  // tickler has done its job of bringing the task here).
   private async setTaskSchedule(task: Task, state: "today" | "later" | "none"): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) {
       return;
     }
     const markers = task.markers.filter((m) => m !== "TODAY" && m !== "LATER");
-    if (state === "today") {
-      markers.push("TODAY");
-    } else if (state === "later") {
-      markers.push("LATER");
+    let start = task.start;
+    if (state === "today" || state === "later") {
+      // Deliberate overrides consume any pending tickler.
+      start = undefined;
+      markers.push(state === "today" ? "TODAY" : "LATER");
+    } else if (start && this.isDateOnOrBefore(start, this.normalizeDate(new Date()))) {
+      // Neutral: drop a spent (past) tickler, but keep a future one — a still-
+      // scheduled task stays scheduled rather than being silently cleared.
+      start = undefined;
     }
-    await this.replaceTaskLine(file, { ...task }, serializeTask({ ...task, markers }));
+    await this.replaceTaskLine(file, { ...task }, serializeTask({ ...task, markers, start }));
+  }
+
+  // Rewrite tasks whose tickler date has arrived into real [TODAY] tasks
+  // (clearing the now-spent tickler). Only touches tasks that would actually
+  // surface — skips parked/cycle files and WAITING/LATER tasks.
+  private async promoteFiredTicklers(): Promise<void> {
+    const today = this.normalizeDate(new Date());
+    const candidatePaths = new Set<string>();
+    for (const snapshot of this.taskIndex.getSnapshots()) {
+      if (this.isParked(snapshot.filePath) || this.isCycleInfrastructure(snapshot.filePath)) {
+        continue;
+      }
+      const hasFired = snapshot.tasks.some(
+        (t) =>
+          t.start &&
+          t.status !== "done" &&
+          t.status !== "cancelled" &&
+          !t.markers.includes("TODAY") &&
+          !t.markers.includes("LATER") &&
+          !t.markers.includes("WAITING") &&
+          this.isDateOnOrBefore(t.start, today)
+      );
+      if (hasFired) {
+        candidatePaths.add(snapshot.filePath);
+      }
+    }
+
+    for (const path of candidatePaths) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) {
+        continue;
+      }
+      const content = await this.app.vault.read(file);
+      const lines = content.split(/\r?\n/);
+      let changed = false;
+      for (let i = 0; i < lines.length; i++) {
+        const task = parseTaskLine(lines[i], path, i, false);
+        if (!task || !task.start) {
+          continue;
+        }
+        if (task.status === "done" || task.status === "cancelled") {
+          continue;
+        }
+        if (task.markers.includes("TODAY") || task.markers.includes("LATER") || task.markers.includes("WAITING")) {
+          continue;
+        }
+        if (!this.isDateOnOrBefore(task.start, today)) {
+          continue;
+        }
+        const promoted: Task = { ...task, start: undefined, markers: [...task.markers, "TODAY"] };
+        lines[i] = serializeTask(promoted);
+        changed = true;
+      }
+      if (changed) {
+        await this.writeLinesToFile(file, lines);
+        await this.taskIndex.updateFile(file);
+      }
+    }
   }
 
   private taskSchedule(task: Task): "today" | "later" | "none" {
+    if (task.markers.includes("LATER")) {
+      return "later";
+    }
     if (task.markers.includes("TODAY")) {
       return "today";
     }
-    if (task.markers.includes("LATER")) {
-      return "later";
+    // A fired tickler (scheduled date reached) reads as "today".
+    if (task.start && this.isDateOnOrBefore(task.start, this.normalizeDate(new Date()))) {
+      return "today";
     }
     return "none";
   }
 
-  private async deferTask(task: Task, dueValue: string): Promise<Task | null> {
+  // Tickle a task to a future date: it disappears now and resurfaces in Today on
+  // that date. Clears [TODAY] (it's no longer for today).
+  private async deferTask(task: Task, ticklerDate: string): Promise<Task | null> {
     const file = this.app.vault.getAbstractFileByPath(task.filePath);
     if (!(file instanceof TFile)) {
       return null;
     }
 
-    const updatedTask: Task = { ...task, due: dueValue, markers: task.markers.filter((marker) => marker !== "TODAY") };
+    const updatedTask: Task = {
+      ...task,
+      start: ticklerDate,
+      markers: task.markers.filter((marker) => marker !== "TODAY"),
+    };
     await this.replaceTaskLine(file, task, serializeTask(updatedTask));
     return updatedTask;
   }
@@ -1556,19 +1689,19 @@ export default class TwelvePlugin extends Plugin {
   }
 
   private getForecastGroup(task: Task, today: Date): string {
-    const dueDate = this.parseDateToken(task.due ?? "");
-    if (!dueDate) {
+    const date = this.parseDateToken(task.start ?? "");
+    if (!date) {
       return "Future Months";
     }
 
     const weekEnd = new Date(today);
     weekEnd.setDate(today.getDate() + (7 - today.getDay()));
 
-    if (dueDate.getTime() <= weekEnd.getTime()) {
+    if (date.getTime() <= weekEnd.getTime()) {
       return "This Week";
     }
 
-    if (dueDate.getFullYear() === today.getFullYear() && dueDate.getMonth() === today.getMonth()) {
+    if (date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth()) {
       return "Later This Month";
     }
 
@@ -1584,21 +1717,20 @@ export default class TwelvePlugin extends Plugin {
       return false;
     }
 
-    // [LATER] is an explicit "not now" — never surfaces, even if dated/[TODAY].
+    // [LATER] is an explicit "not now" — never surfaces.
     if (task.markers.some((marker) => marker.toUpperCase() === "LATER")) {
       return false;
     }
 
-    if (task.start && !this.isDateOnOrBefore(task.start, today)) {
-      return false;
-    }
-
+    // [TODAY] is the sticky "do it today" flag — surfaces until done/re-triaged.
     if (task.markers.some((marker) => marker.toUpperCase() === "TODAY")) {
       return true;
     }
 
-    if (task.due && this.isDateOnOrBefore(task.due, today)) {
-      return true;
+    // A tickler (scheduled date) surfaces once its date has arrived, then stays
+    // (sticky, like [TODAY]) until done. Before its date it stays parked.
+    if (task.start) {
+      return this.isDateOnOrBefore(task.start, today);
     }
 
     return false;
@@ -1694,10 +1826,6 @@ export default class TwelvePlugin extends Plugin {
       return true;
     }
 
-    if (this.settings.includeTicklerFolder && prefixedPath.startsWith(TICKLER_FOLDER)) {
-      return true;
-    }
-
     if (INCLUDED_FILE_NAMES.has(prefixedPath)) {
       if (prefixedPath === "recurring.md" && !this.settings.includeRecurringFile) {
         return false;
@@ -1786,18 +1914,6 @@ class TwelveSettingTab extends PluginSettingTab {
           suggest.close();
         });
       });
-
-    new Setting(containerEl)
-      .setName("Include tickler folder")
-      .setDesc("Include tasks inside a tickler folder when rendering views.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.includeTicklerFolder)
-          .onChange(async (value) => {
-            this.plugin.settings.includeTicklerFolder = value;
-            await this.plugin.saveSettings();
-          })
-      );
 
     new Setting(containerEl)
       .setName("Include recurring file")

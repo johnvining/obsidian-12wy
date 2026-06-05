@@ -19,24 +19,23 @@
   in-file keyboard triage is wanted later, add "toggle Today" / "toggle Later"
   commands operating on the cursor's task line.
 
+## ✅ Done (recent)
+- **Scheduling model simplified.** No due dates. A task surfaces in Today via
+  `[TODAY]` (sticky) or a `[tickler:DATE]` (alias `[start:]`) that has arrived.
+  `[LATER]` suppresses. Forecast = upcoming ticklers. Recurring advances the
+  tickler date. Defer "→" tickles to tomorrow. The `tickler/` folder concept is
+  no longer needed (tickler is a token, not a folder).
+- **Time-model review done.** `[due:]` removed entirely (type/parser/serializer).
+  `tickler/` folder + `includeTicklerFolder` setting removed. `[LATER]` now has a
+  real role: in Projects it's a collapsible "Later (N)" someday group, separate
+  from the active backlog (neutral). Triage no longer silently wipes a pending
+  tickler — neutral keeps a future tickler; only Today/Later consume it. Tickler
+  dates show as a chip on triage rows. `[WAITING]` kept; `[start:]` kept as a
+  tickler alias.
+- **Known edge (low priority):** a `[tickler:]` in a Next Year (parked) or
+  WAITING task never fires (promotion skips them) — by design, but document it.
+
 ## 🟡 Design decisions needed
-
-### Ticklers — figure out how they're supposed to work
-The plugin has an `includeTicklerFolder` setting and a `tickler/` folder
-convention, but the actual *behavior* is undefined — right now `tickler/` files
-are just indexed like any other included tasks. Decide the model:
-
-- **What is a tickler here?** GTD "tickler file" / 43-folders = date-triggered
-  reminders that resurface on a specific future day ("remind me about X on June 15").
-- **How is the date encoded?** Options: filename (`tickler/2026-06-15.md`),
-  a `[start:YYYY-MM-DD]` / `[due:]` token on the task, or a folder-per-day.
-- **When does an item surface?** On its date into **Today**? Into **Forecast**
-  ahead of time? Both?
-- **Lifecycle when it fires:** does it become a normal task (move out of
-  `tickler/`), stay put, or get re-filed? What does "done" mean for a tickler?
-- **Then implement it.** Until decided, ticklers behave like ordinary tasks.
-
-### Other open decisions
 - **Cycle progress vs. commitments:** the dashboard "This week" column rolls up
   weekly commitments per project. Should the **progress bars** (cycle commitment)
   also auto-advance from commitment completion, or stay manually edited?

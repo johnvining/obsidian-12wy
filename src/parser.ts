@@ -34,7 +34,6 @@ export function parseTaskLine(line: string, filePath: string, lineNumber: number
   const markers: string[] = [];
   const extraTokens: string[] = [];
   const tags: string[] = [];
-  let due: string | undefined;
   let start: string | undefined;
   let done: string | undefined;
   let every: string | undefined;
@@ -50,13 +49,15 @@ export function parseTaskLine(line: string, filePath: string, lineNumber: number
       continue;
     }
 
-    if (/^DUE:/i.test(content)) {
-      due = content.slice(4).trim();
+    if (/^START:/i.test(content)) {
+      start = content.slice(6).trim();
       continue;
     }
 
-    if (/^START:/i.test(content)) {
-      start = content.slice(6).trim();
+    // `tickler:` is the friendly name for the scheduled "resurface on" date;
+    // it populates the same field as `start:`.
+    if (/^TICKLER:/i.test(content)) {
+      start = content.slice(8).trim();
       continue;
     }
 
@@ -103,7 +104,6 @@ export function parseTaskLine(line: string, filePath: string, lineNumber: number
     markers,
     extraTokens,
     tags,
-    due,
     start,
     done,
     every,
@@ -142,11 +142,8 @@ export function serializeTask(task: Task): string {
   if (task.priority) {
     tokens.push(`[p:${task.priority}]`);
   }
-  if (task.due) {
-    tokens.push(`[due:${task.due}]`);
-  }
   if (task.start) {
-    tokens.push(`[start:${task.start}]`);
+    tokens.push(`[tickler:${task.start}]`);
   }
   if (task.every) {
     tokens.push(`[every:${task.every}]`);
