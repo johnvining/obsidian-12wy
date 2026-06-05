@@ -1160,12 +1160,15 @@ export default class TwelvePlugin extends Plugin {
     const current = this.taskSchedule(task);
     const actions = parent.createDiv({ cls: "twelve-triage-actions" });
     const active = current === "later";
-    const later = actions.createEl("button", { cls: "twelve-later-toggle", text: "Later" });
+    const later = actions.createEl("button", {
+      cls: "twelve-later-toggle",
+      text: active ? "Available" : "Later",
+    });
     if (active) {
       later.addClass("is-active");
     }
     later.setAttr("aria-pressed", active ? "true" : "false");
-    later.setAttr("title", active ? "Unschedule" : "Defer to someday");
+    later.setAttr("title", active ? "Move to available" : "Defer to someday");
     later.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
