@@ -445,7 +445,64 @@ export default class TwelvePlugin extends Plugin {
       this.renderEmpty(body, "No commitments found for this week.");
       return;
     }
-    this.renderCheckList(body, file, items);
+
+    // Group commitments by the project they link to, so each group's count
+    // visibly equals that project's "Commitments" column on the dashboard.
+    type Group = { label: string; path: string | null; entries: Array<{ item: CommitItem; rest: string }> };
+    const groups = new Map<string, Group>();
+    for (const item of items) {
+      const { label, path, rest } = this.parseCommitmentLabel(item.text, file.path);
+      const key = path ?? " unassigned";
+      let group = groups.get(key);
+      if (!group) {
+        group = { label: label ?? "", path, entries: [] };
+        groups.set(key, group);
+      }
+      group.entries.push({ item, rest });
+    }
+
+    const assigned = [...groups.values()]
+      .filter((g) => g.path)
+      .sort((a, b) => a.label.localeCompare(b.label));
+    for (const group of assigned) {
+      this.renderCommitGroup(body, file, group);
+    }
+    const unassigned = groups.get(" unassigned");
+    if (unassigned) {
+      this.renderCommitGroup(body, file, unassigned);
+    }
+  }
+
+  private renderCommitGroup(
+    body: HTMLElement,
+    file: TFile,
+    group: { label: string; path: string | null; entries: Array<{ item: CommitItem; rest: string }> }
+  ) {
+    const done = group.entries.filter((e) => e.item.status === "done").length;
+    const groupEl = body.createDiv({ cls: "twelve-commit-group" });
+    if (!group.path) {
+      groupEl.addClass("is-warning");
+    }
+
+    const head = groupEl.createDiv({ cls: "twelve-commit-group-head" });
+    if (group.path) {
+      this.projectPill(head, group.label, group.path);
+    } else {
+      const warn = head.createSpan({ cls: "twelve-commit-warning" });
+      setIcon(warn, "alert-triangle");
+      warn.createSpan({ text: "Needs a project — add a [[link]]" });
+    }
+    head.createSpan({ cls: "twelve-commit-count", text: `${done}/${group.entries.length}` });
+
+    const list = groupEl.createDiv({ cls: "twelve-list" });
+    for (const { item, rest } of group.entries) {
+      const row = list.createDiv({ cls: "twelve-row" });
+      if (item.status === "done") {
+        row.addClass("is-done");
+      }
+      this.checkbox(row, item.status === "done", () => this.toggleListLine(file, item));
+      row.createDiv({ cls: "twelve-row-text", text: rest });
+    }
   }
 
   private renderTracker(
@@ -680,9 +737,9 @@ export default class TwelvePlugin extends Plugin {
     const table = body.createEl("table", { cls: "twelve-wy-table" });
     const headRow = table.createEl("thead").createEl("tr");
     headRow.createEl("th", { text: "Project" });
-    headRow.createEl("th", { text: "Commitment (done / target)" });
-    headRow.createEl("th", { cls: "twelve-wy-week", text: "This week" });
-    headRow.createEl("th", { cls: "twelve-wy-open", text: "Open" });
+    headRow.createEl("th", { text: "Goal (done / target)" });
+    headRow.createEl("th", { cls: "twelve-wy-week", text: "Commitments" });
+    headRow.createEl("th", { cls: "twelve-wy-open", text: "Backlog" });
 
     const tbody = table.createEl("tbody");
     for (const project of projects) {
@@ -692,7 +749,7 @@ export default class TwelvePlugin extends Plugin {
 
       const progCell = tr.createEl("td", { cls: "twelve-wy-progress" });
       if (!project.meta.progress.length) {
-        progCell.createSpan({ cls: "twelve-faint", text: "no commitment set" });
+        progCell.createSpan({ cls: "twelve-faint", text: "no goal set" });
       } else {
         for (const metric of project.meta.progress) {
           const line = progCell.createDiv({ cls: "twelve-metric" });
