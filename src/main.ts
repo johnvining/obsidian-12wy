@@ -1888,8 +1888,33 @@ export default class TwelvePlugin extends Plugin {
         this.activeViews.delete(entry);
         continue;
       }
-      void this.processCodeBlock(entry.source, entry.el, entry.ctx);
+      // processCodeBlock calls el.empty(), which momentarily collapses the
+      // view's height and makes the browser clamp the page scroll to the top.
+      // Capture the scroll position of the surrounding scroller and restore it
+      // once the re-render has rebuilt the content, so marking a task done in
+      // (e.g.) the Today view doesn't jump the page back to the top.
+      const scroller = this.findScrollParent(entry.el);
+      const scrollTop = scroller?.scrollTop ?? 0;
+      void this.processCodeBlock(entry.source, entry.el, entry.ctx).then(() => {
+        if (scroller && scroller.scrollTop !== scrollTop) {
+          scroller.scrollTop = scrollTop;
+        }
+      });
     }
+  }
+
+  // Walk up to the nearest vertically-scrollable ancestor (the Obsidian preview
+  // scroller), so we can preserve its position across a re-render.
+  private findScrollParent(el: HTMLElement): HTMLElement | null {
+    let node: HTMLElement | null = el.parentElement;
+    while (node) {
+      const style = window.getComputedStyle(node);
+      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
   }
 }
 
