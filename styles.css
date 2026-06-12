@@ -326,6 +326,10 @@ a.twelve-pill.twelve-link:hover {
 .twelve-tracker tr.is-today td.twelve-tracker-cell {
   background: var(--background-modifier-hover);
 }
+.twelve-view table.twelve-tracker td.twelve-tracker-na {
+  text-align: center;
+  color: var(--text-faint);
+}
 
 /* ---- Dashboard cards --------------------------------------------------- */
 .twelve-dash-grid {

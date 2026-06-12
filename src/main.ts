@@ -551,8 +551,17 @@ export default class TwelvePlugin extends Plugin {
           tr.createEl("td", { cls: "twelve-tracker-day", text: cell });
           return;
         }
+        const raw = cell.trim();
         const td = tr.createEl("td", { cls: "twelve-tracker-cell" });
-        const checked = cell.trim().toUpperCase() === "Y";
+        // A cell explicitly marked not-applicable (em dash, hyphen, or N/A) is a
+        // static greyed marker, not an unchecked box — so it reads differently
+        // from "haven't done it yet" and can't be toggled to Y by a stray click.
+        if (["—", "-", "n/a", "na"].includes(raw.toLowerCase())) {
+          td.addClass("twelve-tracker-na");
+          td.setText("–");
+          return;
+        }
+        const checked = raw.toUpperCase() === "Y";
         this.checkbox(td, checked, async () => {
           const lineIndex = tracker.rowLines[rowIndex];
           if (lineIndex === undefined) {
