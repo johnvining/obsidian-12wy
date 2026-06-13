@@ -439,7 +439,61 @@ export default class TwelvePlugin extends Plugin {
       this.renderEmpty(body, "Nothing else surfaced for today.");
       return;
     }
-    this.renderTaskTable(body, this.sortTasks(surfaced), { actions: true, showProject: true });
+
+    // Group surfaced tasks by project — same grouping the Commitments section
+    // does — so the Other list reads project-by-project instead of one flat
+    // priority-sorted run.
+    type TaskGroup = { label: string; path: string | null; tasks: Task[] };
+    const groups = new Map<string, TaskGroup>();
+    for (const task of surfaced) {
+      // Derive the project exactly as renderTaskTable does, so a group matches
+      // the project pill its tasks would show: a leading [[wikilink]]/[tag]
+      // (recurring tasks) wins over the host file.
+      let label = this.projectTitle(task.filePath);
+      let path: string | null = task.filePath;
+      const parsed = this.parseCommitmentLabel(task.text, task.filePath);
+      if (parsed.label) {
+        label = parsed.label;
+        path = parsed.path;
+      }
+      // A task is ad-hoc when it resolves to no project: either an inline link
+      // that didn't resolve, or a non-project file (adhoc/errands/inbox, where
+      // projectTier is null) with no inline link. These share one group, last.
+      const isProject = parsed.label ? parsed.path !== null : this.projectTier(task.filePath) !== null;
+      const key = isProject && path ? path : " unassigned";
+      let group = groups.get(key);
+      if (!group) {
+        group = { label: isProject ? label : "Ad-hoc", path: isProject ? path : null, tasks: [] };
+        groups.set(key, group);
+      }
+      group.tasks.push(task);
+    }
+
+    const assigned = [...groups.values()]
+      .filter((g) => g.path)
+      .sort((a, b) => a.label.localeCompare(b.label));
+    for (const group of assigned) {
+      this.renderTaskGroup(body, group);
+    }
+    const adhoc = groups.get(" unassigned");
+    if (adhoc) {
+      this.renderTaskGroup(body, adhoc);
+    }
+  }
+
+  // One project's worth of surfaced tasks under a project sub-heading, reusing
+  // the Commitments group styling for a consistent look. The project is the
+  // heading, so the per-row pill is dropped (stripProject) — but the leading
+  // [[wikilink]] is still pulled out of the task text so it reads cleanly.
+  private renderTaskGroup(body: HTMLElement, group: { label: string; path: string | null; tasks: Task[] }) {
+    const groupEl = body.createDiv({ cls: "twelve-commit-group" });
+    const head = groupEl.createDiv({ cls: "twelve-commit-group-head" });
+    this.projectPill(head, group.label, group.path);
+    const open = group.tasks.filter((t) => t.status !== "done").length;
+    if (open) {
+      head.createSpan({ cls: "twelve-commit-count", text: String(open) });
+    }
+    this.renderTaskTable(groupEl, this.sortTasks(group.tasks), { actions: true, stripProject: true });
   }
 
   private renderCommitments(container: HTMLElement, file: TFile, weekNumber: number, items: CommitItem[]) {
@@ -599,7 +653,7 @@ export default class TwelvePlugin extends Plugin {
   private renderTaskTable(
     body: HTMLElement,
     tasks: Task[],
-    opts: { actions?: boolean; showProject?: boolean; showSchedule?: boolean }
+    opts: { actions?: boolean; showProject?: boolean; showSchedule?: boolean; stripProject?: boolean }
   ) {
     const table = body.createEl("table", { cls: "twelve-task-table" });
     const tbody = table.createEl("tbody");
@@ -616,10 +670,12 @@ export default class TwelvePlugin extends Plugin {
       // via a leading [[wikilink]] — recurring/forecast tasks live in one file
       // and point at their real project this way. Pull it out so the text reads
       // cleanly and the pill links to the actual project, not the host file.
+      // stripProject pulls the leading link out of the text without rendering a
+      // project column — used when the project is shown as a group heading.
       let displayText = task.text;
       let projectLabel = this.projectTitle(task.filePath);
       let projectPath: string | null = task.filePath;
-      if (opts.showProject) {
+      if (opts.showProject || opts.stripProject) {
         const parsed = this.parseCommitmentLabel(task.text, task.filePath);
         if (parsed.label) {
           displayText = parsed.rest;
